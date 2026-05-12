@@ -30,13 +30,18 @@ from prismatic.extern.hf.modeling_prismatic import OpenVLAForActionPrediction
 from prismatic.extern.hf.processing_prismatic import PrismaticImageProcessor, PrismaticProcessor
 
 
+# conda activate /hdd2/kai/openvla-oft/env
+# CUDA_VISIBLE_DEVICES="2" python vla-scripts/merge_lora_weights_and_save.py
+
+
 @dataclass
 class ConvertConfig:
-    # fmt: off
-
-    base_checkpoint: Union[str, Path] = ""                   # Base model checkpoint path/dir (either openvla/openvla-7b or whichever model you fine-tuned / resumed training from)
-    lora_finetuned_checkpoint_dir: Union[str, Path] = ""     # Checkpoint directory containing the LoRA adapter
-
+    # fmt: off  
+    # Base model checkpoint path/dir (either openvla/openvla-7b or whichever model you fine-tuned / resumed training from)
+    base_checkpoint: Union[str, Path] = "openvla/openvla-7b"       
+    # base_checkpoint: Union[str, Path] = "moojink/openvla-7b-oft-finetuned-libero-spatial-object-goal-10"            
+    # Checkpoint directory containing the LoRA adapter
+    lora_finetuned_checkpoint_dir: Union[str, Path] = "/hdd2/kai/openvla-oft/checkpoints/libero/libero_sub_decomposed_progress_A100_1111/openvla-7b+libero_decomposed_progress+b16+lr-0.0005+lora-r32+dropout-0.0--image_aug--parallel_dec--8_acts_chunk--continuous_acts--diffusion--3rd_person_img--wrist_img--proprio_state--50000_chkpt"     
     # fmt: on
 
 

@@ -14,7 +14,7 @@ from experiments.robot.openvla_utils import (
 )
 
 # Initialize important constants
-ACTION_DIM = 7
+ACTION_DIM = 9
 DATE = time.strftime("%Y_%m_%d")
 DATE_TIME = time.strftime("%Y_%m_%d-%H_%M_%S")
 DEVICE = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
@@ -146,7 +146,7 @@ def get_action(
     return action
 
 
-def normalize_gripper_action(action: np.ndarray, binarize: bool = True) -> np.ndarray:
+def normalize_gripper_action(action: np.ndarray, binarize: bool = True, stop: bool = False, progress : bool = False) -> np.ndarray:
     """
     Normalize gripper action from [0,1] to [-1,+1] range.
 
@@ -168,16 +168,43 @@ def normalize_gripper_action(action: np.ndarray, binarize: bool = True) -> np.nd
 
     # Normalize the last action dimension to [-1,+1]
     orig_low, orig_high = 0.0, 1.0
-    normalized_action[..., -1] = 2 * (normalized_action[..., -1] - orig_low) / (orig_high - orig_low) - 1
 
-    if binarize:
-        # Binarize to -1 or +1
-        normalized_action[..., -1] = np.sign(normalized_action[..., -1])
+    if stop and not progress:
+        # Normalize gripper at -2 and stop at -1
+        normalized_action[..., -2] = 2 * (normalized_action[..., -2] - orig_low) / (orig_high - orig_low) - 1
+        if binarize:
+            normalized_action[..., -2] = np.sign(normalized_action[..., -2])
+
+        normalized_action[..., -1] = 2 * (normalized_action[..., -1] - orig_low) / (orig_high - orig_low) - 1
+        if binarize:
+            normalized_action[..., -1] = np.sign(normalized_action[..., -1])
+
+    elif not stop and progress:
+        # Normalize gripper at -2, progress signal at -1 unchanged
+        normalized_action[..., -2] = 2 * (normalized_action[..., -2] - orig_low) / (orig_high - orig_low) - 1
+        if binarize:
+            normalized_action[..., -2] = np.sign(normalized_action[..., -2])
+
+    elif stop and progress:
+        # Normalize gripper at -3, stop at -2, progress signal at -1 unchanged
+        normalized_action[..., -3] = 2 * (normalized_action[..., -3] - orig_low) / (orig_high - orig_low) - 1
+        if binarize:
+            normalized_action[..., -3] = np.sign(normalized_action[..., -3])
+
+        normalized_action[..., -2] = 2 * (normalized_action[..., -2] - orig_low) / (orig_high - orig_low) - 1
+        if binarize:
+            normalized_action[..., -2] = np.sign(normalized_action[..., -2])
+
+    else:
+        # Only normalize gripper at -1
+        normalized_action[..., -1] = 2 * (normalized_action[..., -1] - orig_low) / (orig_high - orig_low) - 1
+        if binarize:
+            normalized_action[..., -1] = np.sign(normalized_action[..., -1])
 
     return normalized_action
 
 
-def invert_gripper_action(action: np.ndarray) -> np.ndarray:
+def invert_gripper_action(action: np.ndarray, stop: bool = False, progress: bool = False) -> np.ndarray:
     """
     Flip the sign of the gripper action (last dimension of action vector).
 
@@ -193,7 +220,22 @@ def invert_gripper_action(action: np.ndarray) -> np.ndarray:
     # Create a copy to avoid modifying the original
     inverted_action = action.copy()
 
-    # Invert the gripper action
-    inverted_action[..., -1] *= -1.0
+    if stop and not progress:
+        # Flip both gripper (at -2) and stop (at -1)
+        inverted_action[..., -2] *= -1.0
+        inverted_action[..., -1] *= -1.0
+
+    elif not stop and progress:
+        # Flip gripper (at -2), progres signal (at -1) unchanged
+        inverted_action[..., -2] *= -1.0
+
+    elif stop and progress:
+        # Flip both gripper (at -3) and stop (at -2), progres signal (at -1) unchanged
+        inverted_action[..., -3] *= -1.0
+        inverted_action[..., -2] *= -1.0
+
+    else:
+        # Only flip gripper (at -1)
+        inverted_action[..., -1] *= -1.0
 
     return inverted_action

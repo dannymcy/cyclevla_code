@@ -1,0 +1,6 @@
+[submodule "openpi"]
+	path = openpi
+	url = git@github.com:dannymcy/cyclevla_openpi.git
+[submodule "rlds_dataset_builder"]
+	path = rlds_dataset_builder
+	url = git@github.com:dannymcy/cyclevla_rlds_dataset_builder.git

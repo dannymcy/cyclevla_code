@@ -71,7 +71,7 @@ def save_rollout_video(rollout_images, idx, success, task_description, log_file=
     rollout_dir = f"./rollouts/{DATE}"
     os.makedirs(rollout_dir, exist_ok=True)
     processed_task_description = task_description.lower().replace(" ", "_").replace("\n", "_").replace(".", "_")[:50]
-    filetag = f"{rollout_dir}/{DATE_TIME}--openvla--episode={idx}--success={success}--task={processed_task_description}"
+    filetag = f"{rollout_dir}/{DATE_TIME}--openvla_oft--episode={idx}--success={success}--task={processed_task_description}"
     if notes is not None:
         filetag += f"--{notes}"
     mp4_path = f"{filetag}.mp4"

@@ -153,15 +153,15 @@ class DiffusionActionHead(nn.Module):
         input_dim=4096,
         hidden_dim=4096,
         action_dim=7,
-        num_diffusion_steps=100,
+        num_diffusion_steps_train=50,
     ):
         super().__init__()
         self.action_dim = action_dim
         self.noise_predictor = NoisePredictionModel(
             transformer_hidden_dim=hidden_dim*ACTION_DIM, hidden_dim=hidden_dim, action_dim=action_dim
         )
-        self.noise_scheduler = DDIMScheduler(num_train_timesteps=num_diffusion_steps, beta_schedule="squaredcos_cap_v2")
-        self.num_diffusion_steps = num_diffusion_steps
+        self.num_diffusion_steps_train = num_diffusion_steps_train
+        self.noise_scheduler = DDIMScheduler(num_train_timesteps=num_diffusion_steps_train, beta_schedule="squaredcos_cap_v2")
         self.time_encoder = SinusoidalPositionalEncoding(dim=hidden_dim)
 
     def sample_noisy_actions(self, ground_truth_actions):

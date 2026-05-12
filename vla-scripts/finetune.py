@@ -63,6 +63,61 @@ from prismatic.vla.datasets.rlds.utils.data_utils import save_dataset_statistics
 
 # Sane Defaults
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
+# os.environ["HF_ENDPOINT"] = "http://hf-mirror.com"  # for rent server
+
+
+# watch -n 1 nvidia-smi
+# conda activate /hdd2/kai/openvla-oft/env
+
+
+# TODO: For CPS server
+# CUDA_VISIBLE_DEVICES="0,1" torchrun --standalone --nnodes 1 --nproc-per-node 2 vla-scripts/finetune.py \
+#   --vla_path moojink/openvla-7b-oft-finetuned-libero-spatial-object-goal-10 \
+#   --data_root_dir "/hdd2/kai/openvla-oft/decomposed_dataset/libero/" \
+#   --dataset_name libero_decomposed \
+#   --run_root_dir "/hdd2/kai/openvla-oft/checkpoints/libero/libero_decomposed_A10/" \
+#   --use_l1_regression True \
+#   --use_diffusion False \
+#   --use_film False \
+#   --num_images_in_input 1 \
+#   --use_proprio True \
+#   --batch_size 1 \
+#   --learning_rate 5e-4 \
+#   --num_steps_before_decay 20000 \
+#   --max_steps 300005 \
+#   --save_freq 5000 \
+#   --save_latest_checkpoint_only True \
+#   --image_aug True \
+#   --lora_rank 32 \
+#   --grad_accumulation_steps 8 \
+#   --wandb_entity "dannymcy-university-of-oxford" \
+#   --wandb_project "CycleVLA_libero_decomposed_oft_A10" \
+#   --run_id_note parallel_dec--8_acts_chunk--continuous_acts--L1_regression--3rd_person_img--proprio_state
+
+
+# TODO: For rent server
+# torchrun --standalone --nnodes 1 --nproc-per-node 4 vla-scripts/finetune.py \
+#   --vla_path openvla/openvla-7b \
+#   --data_root_dir "/dev/shm/decomposed_dataset/libero/" \
+#   --dataset_name libero_decomposed \
+#   --run_root_dir "/root/autodl-tmp/openvla-oft/checkpoints/libero/libero_decomposed_A100/" \
+#   --use_l1_regression True \
+#   --use_diffusion False \
+#   --use_film False \
+#   --num_images_in_input 2 \
+#   --use_proprio True \
+#   --batch_size 8 \
+#   --learning_rate 5e-4 \
+#   --num_steps_before_decay 100000 \
+#   --max_steps 500005 \
+#   --save_freq 10000 \
+#   --save_latest_checkpoint_only False \
+#   --image_aug True \
+#   --lora_rank 32 \
+#   --grad_accumulation_steps 8 \
+#   --wandb_entity "dannymcy-university-of-oxford" \
+#   --wandb_project "CycleVLA_libero_decomposed_A100" \
+#   --run_id_note parallel_dec--8_acts_chunk--continuous_acts--L1_regression--3rd_person_img--wrist_img--proprio_state
 
 
 @dataclass
@@ -79,7 +134,7 @@ class FinetuneConfig:
     # Algorithm and architecture
     use_l1_regression: bool = True                   # If True, trains continuous action head with L1 regression objective
     use_diffusion: bool = False                      # If True, trains continuous action head with diffusion modeling objective (DDIM)
-    num_diffusion_steps: int = 50                    # (When `diffusion==True`) Number of diffusion steps for training
+    num_diffusion_steps_train: int = 50              # (When `diffusion==True`) Number of diffusion steps used for training
     use_film: bool = False                           # If True, uses FiLM to infuse language inputs into visual features
     num_images_in_input: int = 1                     # Number of images in the VLA input (default: 1)
     use_proprio: bool = False                        # If True, includes robot proprioceptive state in input
@@ -89,7 +144,7 @@ class FinetuneConfig:
     learning_rate: float = 5e-4                      # Learning rate
     lr_warmup_steps: int = 0                         # Number of steps to warm up learning rate (from 10% to 100%)
     num_steps_before_decay: int = 100_000            # Number of steps before LR decays by 10x
-    grad_accumulation_steps: int = 1                 # Number of gradient accumulation steps
+    grad_accumulation_steps: int = 1                 # Number of gradient accumulation steps (1)
     max_steps: int = 200_000                         # Max number of training steps
     use_val_set: bool = False                        # If True, uses validation set and log validation metrics
     val_freq: int = 10_000                           # (When `use_val_set==True`) Validation set logging frequency in steps
@@ -106,9 +161,9 @@ class FinetuneConfig:
     use_lora: bool = True                            # If True, uses LoRA fine-tuning
     lora_rank: int = 32                              # Rank of LoRA weight matrix
     lora_dropout: float = 0.0                        # Dropout applied to LoRA weights
-    merge_lora_during_training: bool = True          # If True, merges LoRA weights and saves result during training
+    merge_lora_during_training: bool = False         # If True, merges LoRA weights and saves result during training
                                                      #   Note: Merging can be very slow on some machines. If so, set to
-                                                     #         False and merge final checkpoint offline!
+                                                     #         False and merge final checkpoint offline! (True)
 
     # Logging
     wandb_entity: str = "your-wandb-entity"          # Name of WandB entity
@@ -280,7 +335,7 @@ def run_forward_pass(
     use_film,
     num_patches,
     compute_diffusion_l1=False,
-    num_diffusion_steps=None,
+    num_diffusion_steps_train=None,
 ) -> Tuple[torch.Tensor, Dict[str, float]]:
     """
     Compute model forward pass and metrics for both training and validation.
@@ -300,7 +355,7 @@ def run_forward_pass(
         num_patches (int): Number of vision patches.
         compute_diffusion_l1 (bool): Whether to sample actions and compute L1 loss for diffusion (do this once every
                                     diffusion_sample_freq steps during training; do it every batch for validation)
-        num_diffusion_steps (int): Number of diffusion steps (only used for diffusion).
+        num_diffusion_steps_train (int): Number of diffusion steps for training (only used for diffusion).
 
     Returns:
         tuple: (loss, metrics_dict)
@@ -428,15 +483,29 @@ def run_forward_pass(
             predicted_curr_action = predicted_actions[:, 0]
             ground_truth_next_actions = ground_truth_actions[:, 1:]
             predicted_next_actions = predicted_actions[:, 1:]
+
+            # Standard L1
             curr_action_l1_loss = torch.nn.L1Loss()(ground_truth_curr_action, predicted_curr_action)
             next_actions_l1_loss = torch.nn.L1Loss()(ground_truth_next_actions, predicted_next_actions)
+
+            # Extra L1s
+            curr_action_l1_action = torch.nn.L1Loss()(ground_truth_curr_action[:, :7], predicted_curr_action[:, :7])
+            curr_action_l1_stop = torch.nn.L1Loss()(ground_truth_curr_action[:, 7:], predicted_curr_action[:, 7:])
+
+            next_action_l1_action = torch.nn.L1Loss()(ground_truth_next_actions[:, :, :7], predicted_next_actions[:, :, :7])
+            next_action_l1_stop = torch.nn.L1Loss()(ground_truth_next_actions[:, :, 7:], predicted_next_actions[:, :, 7:])
+
             metrics.update(
                 {
                     "curr_action_l1_loss": curr_action_l1_loss.item(),
                     "next_actions_l1_loss": next_actions_l1_loss.item(),
+                    "curr_action_l1_loss_action": curr_action_l1_action.item(),
+                    "curr_action_l1_loss_stop": curr_action_l1_stop.item(),
+                    "next_actions_l1_loss_action": next_action_l1_action.item(),
+                    "next_actions_l1_loss_stop": next_action_l1_stop.item(),
                 }
             )
-
+            
     # Return both the loss tensor (with gradients) and the metrics dictionary (with detached values)
     return loss, metrics
 
@@ -485,7 +554,7 @@ def run_diffusion_sampling(
     )  # (B, chunk_len, action_dim)
 
     # Set diffusion timestep values
-    action_head.module.noise_scheduler.set_timesteps(action_head.module.num_diffusion_steps)
+    action_head.module.noise_scheduler.set_timesteps(action_head.module.num_diffusion_steps_train)
 
     # Reverse diffusion: Iteratively denoise to generate action, conditioned on observation
     curr_noisy_actions = noise
@@ -723,7 +792,7 @@ def run_validation(
                 use_film=cfg.use_film,
                 num_patches=num_patches,
                 compute_diffusion_l1=True,
-                num_diffusion_steps=cfg.num_diffusion_steps if cfg.use_diffusion else None,
+                num_diffusion_steps_train=cfg.num_diffusion_steps_train if cfg.use_diffusion else None,
             )
 
             # Add the loss value to the metrics
@@ -751,7 +820,7 @@ def run_validation(
 
 
 @draccus.wrap()
-def finetune(cfg: FinetuneConfig) -> None:
+def finetune(cfg: FinetuneConfig, stop: bool = True) -> None:
     """
     Fine-tunes base VLA on demonstration dataset via LoRA.
 
@@ -874,6 +943,9 @@ def finetune(cfg: FinetuneConfig) -> None:
     # Wrap VLA with DDP
     vla = wrap_ddp(vla, device_id, find_unused=True)
 
+    # This line is VERY IMPORTANT, see research journal 19 May 2025
+    torch.cuda.empty_cache()
+
     # If applicable, instantiate proprio projector
     if cfg.use_proprio:
         proprio_projector = init_module(
@@ -906,7 +978,7 @@ def finetune(cfg: FinetuneConfig) -> None:
                 "input_dim": vla.module.llm_dim,
                 "hidden_dim": vla.module.llm_dim,
                 "action_dim": ACTION_DIM,
-                "num_diffusion_steps": cfg.num_diffusion_steps,
+                "num_diffusion_steps_train": cfg.num_diffusion_steps_train,
             },
             to_bf16=True,
         )
@@ -1020,13 +1092,26 @@ def finetune(cfg: FinetuneConfig) -> None:
         )
 
     # Deque to store recent train metrics (used for computing smoothened metrics for gradient accumulation)
-    recent_metrics = {
-        "loss_value": deque(maxlen=cfg.grad_accumulation_steps),
-        "curr_action_accuracy": deque(maxlen=cfg.grad_accumulation_steps),
-        "curr_action_l1_loss": deque(maxlen=cfg.grad_accumulation_steps),
-        "next_actions_accuracy": deque(maxlen=cfg.grad_accumulation_steps),
-        "next_actions_l1_loss": deque(maxlen=cfg.grad_accumulation_steps),
-    }
+    if stop:
+        recent_metrics = {
+            "loss_value": deque(maxlen=cfg.grad_accumulation_steps),
+            "curr_action_accuracy": deque(maxlen=cfg.grad_accumulation_steps),
+            "curr_action_l1_loss": deque(maxlen=cfg.grad_accumulation_steps),
+            "curr_action_l1_loss_action": deque(maxlen=cfg.grad_accumulation_steps),  # ✅ new
+            "curr_action_l1_loss_stop": deque(maxlen=cfg.grad_accumulation_steps),    # ✅ new
+            "next_actions_accuracy": deque(maxlen=cfg.grad_accumulation_steps),
+            "next_actions_l1_loss": deque(maxlen=cfg.grad_accumulation_steps),
+            "next_actions_l1_loss_action": deque(maxlen=cfg.grad_accumulation_steps),  # ✅ new
+            "next_actions_l1_loss_stop": deque(maxlen=cfg.grad_accumulation_steps),    # ✅ new
+        }
+    else:
+        recent_metrics = {
+            "loss_value": deque(maxlen=cfg.grad_accumulation_steps),
+            "curr_action_accuracy": deque(maxlen=cfg.grad_accumulation_steps),
+            "curr_action_l1_loss": deque(maxlen=cfg.grad_accumulation_steps),
+            "next_actions_accuracy": deque(maxlen=cfg.grad_accumulation_steps),
+            "next_actions_l1_loss": deque(maxlen=cfg.grad_accumulation_steps),
+        }
 
     # Start training
     with tqdm.tqdm(total=cfg.max_steps, leave=False) as progress:
@@ -1049,7 +1134,7 @@ def finetune(cfg: FinetuneConfig) -> None:
                 use_film=cfg.use_film,
                 num_patches=NUM_PATCHES,
                 compute_diffusion_l1=compute_diffusion_l1,
-                num_diffusion_steps=cfg.num_diffusion_steps if cfg.use_diffusion else None,
+                num_diffusion_steps_train=cfg.num_diffusion_steps_train if cfg.use_diffusion else None,
             )
 
             # Normalize loss to account for gradient accumulation
@@ -1062,6 +1147,14 @@ def finetune(cfg: FinetuneConfig) -> None:
             for metric_name, value in metrics.items():
                 if metric_name in recent_metrics:
                     recent_metrics[metric_name].append(value)
+
+            if batch_idx < 2 and distributed_state.is_main_process:
+                print(f"[DEBUG] Batch keys: {batch.keys()}")
+                for k, v in batch.items():
+                    try:
+                        print(f"[DEBUG] {k}: shape = {v.shape}, dtype = {v.dtype}")
+                    except Exception:
+                        print(f"[DEBUG] {k}: type = {type(v)}")
 
             # Compute gradient step index
             gradient_step_idx = batch_idx // cfg.grad_accumulation_steps
@@ -1139,4 +1232,4 @@ def finetune(cfg: FinetuneConfig) -> None:
 
 
 if __name__ == "__main__":
-    finetune()
+    finetune(stop=False)

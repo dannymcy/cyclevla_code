@@ -824,21 +824,78 @@ def tdroid_dataset_transform(trajectory: Dict[str, Any]) -> Dict[str, Any]:
     return trajectory
 
 
+# Add stop + progress signal
 def libero_dataset_transform(trajectory: Dict[str, Any]) -> Dict[str, Any]:
     # gripper action is in -1 (open)...1 (close) --> clip to 0...1, flip --> +1 = open, 0 = close
     gripper_action = trajectory["action"][:, -1:]
     gripper_action = invert_gripper_actions(tf.clip_by_value(gripper_action, 0, 1))
 
+    # Binary stop signal from is_last
+    is_last = tf.cast(trajectory["is_last"], tf.float32)  # shape (T,)
+    stop_signal = tf.expand_dims(is_last, axis=1)         # shape (T, 1)
+    
+    # Progress signal from is_terminal (already in [0.1, 1.0])
+    progress = tf.cast(trajectory["is_terminal"], tf.float32)  # shape (T,)
+    progress_signal = tf.expand_dims(progress, axis=1)          # shape (T, 1)
+
+    # Concatenate full action: [6D pose, gripper, stop, progress]
     trajectory["action"] = tf.concat(
         [
-            trajectory["action"][:, :6],
-            gripper_action,
+            trajectory["action"][:, :6],   # 6D EEF
+            gripper_action,                 # 1D gripper
+            stop_signal,                    # 1D binary stop (0 or 1)
+            progress_signal,                # 1D progress (0.1 to 1.0)
         ],
         axis=1,
     )
+    
     trajectory["observation"]["EEF_state"] = trajectory["observation"]["state"][:, :6]
     trajectory["observation"]["gripper_state"] = trajectory["observation"]["state"][:, -2:]  # 2D gripper state
     return trajectory
+
+
+# Add stop/progress signal
+# def libero_dataset_transform(trajectory: Dict[str, Any]) -> Dict[str, Any]:
+#     # gripper action is in -1 (open)...1 (close) --> clip to 0...1, flip --> +1 = open, 0 = close
+#     gripper_action = trajectory["action"][:, -1:]
+#     gripper_action = invert_gripper_actions(tf.clip_by_value(gripper_action, 0, 1))
+
+#     # Stop signal: is_terminal → 1.0 (stop), 0.0 (continue)
+#     # Or Progress signal: is_terminal now stores progress in [0,1]
+#     is_terminal = tf.cast(trajectory["is_terminal"], tf.float32)  # shape (T,)
+#     stop_signal = tf.expand_dims(is_terminal, axis=1)             # shape (T, 1)
+
+#     # Concatenate full action: [6D pose, gripper, stop]
+#     trajectory["action"] = tf.concat(
+#         [
+#             trajectory["action"][:, :6],   # 6D EEF
+#             gripper_action,                # 1D gripper
+#             stop_signal,                   # 1D stop
+#         ],
+#         axis=1,
+#     )
+    
+#     trajectory["observation"]["EEF_state"] = trajectory["observation"]["state"][:, :6]
+#     trajectory["observation"]["gripper_state"] = trajectory["observation"]["state"][:, -2:]  # 2D gripper state
+#     return trajectory
+
+
+# Original with no stop/progress signal
+# def libero_dataset_transform(trajectory: Dict[str, Any]) -> Dict[str, Any]:
+#     # gripper action is in -1 (open)...1 (close) --> clip to 0...1, flip --> +1 = open, 0 = close
+#     gripper_action = trajectory["action"][:, -1:]
+#     gripper_action = invert_gripper_actions(tf.clip_by_value(gripper_action, 0, 1))
+
+#     trajectory["action"] = tf.concat(
+#         [
+#             trajectory["action"][:, :6],
+#             gripper_action,
+#         ],
+#         axis=1,
+#     )
+#     trajectory["observation"]["EEF_state"] = trajectory["observation"]["state"][:, :6]
+#     trajectory["observation"]["gripper_state"] = trajectory["observation"]["state"][:, -2:]  # 2D gripper state
+#     return trajectory
 
 
 def aloha_dataset_transform(trajectory: Dict[str, Any]) -> Dict[str, Any]:
@@ -925,6 +982,9 @@ OXE_STANDARDIZATION_TRANSFORMS = {
     "libero_goal_no_noops": libero_dataset_transform,
     "libero_10_no_noops": libero_dataset_transform,
     "libero_4_task_suites_no_noops": libero_dataset_transform,
+    "libero_decomposed": libero_dataset_transform,
+    "libero_decomposed_oversample": libero_dataset_transform,
+    "libero_decomposed_progress": libero_dataset_transform,
     ### ALOHA fine-tuning datasets
     "aloha1_fold_shorts_20_demos": aloha_dataset_transform,
     "aloha1_fold_shirt_30_demos": aloha_dataset_transform,

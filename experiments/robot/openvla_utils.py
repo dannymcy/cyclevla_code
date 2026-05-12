@@ -323,8 +323,8 @@ def _apply_film_to_vla(vla: torch.nn.Module, cfg: Any) -> torch.nn.Module:
 
     # Apply LoRA configuration
     lora_config = LoraConfig(
-        r=32,
-        lora_alpha=16,
+        r=cfg.lora_rank,
+        lora_alpha=min(cfg.lora_rank, 16),
         lora_dropout=0.0,
         target_modules="all-linear",
         init_lora_weights="gaussian",
@@ -417,6 +417,7 @@ def get_proprio_projector(cfg: Any, llm_dim: int, proprio_dim: int) -> ProprioPr
             "moojink/openvla-7b-oft-finetuned-libero-object": "proprio_projector--150000_checkpoint.pt",
             "moojink/openvla-7b-oft-finetuned-libero-goal": "proprio_projector--50000_checkpoint.pt",
             "moojink/openvla-7b-oft-finetuned-libero-10": "proprio_projector--150000_checkpoint.pt",
+            "moojink/openvla-7b-oft-finetuned-libero-spatial-object-goal-10": "proprio_projector--300000_checkpoint.pt",
         }
         if cfg.pretrained_checkpoint not in model_path_to_proprio_projector_name.keys():
             raise ValueError("Unsupported HF Hub pretrained checkpoint found!")
@@ -481,8 +482,10 @@ def get_action_head(cfg: Any, llm_dim: int) -> Union[L1RegressionActionHead, Dif
         action_head = L1RegressionActionHead(input_dim=llm_dim, hidden_dim=llm_dim, action_dim=ACTION_DIM)
     elif cfg.use_diffusion:
         action_head = DiffusionActionHead(
-            input_dim=llm_dim, hidden_dim=llm_dim, action_dim=ACTION_DIM, num_diffusion_steps=cfg.num_diffusion_steps
+            input_dim=llm_dim, hidden_dim=llm_dim, action_dim=ACTION_DIM, num_diffusion_steps_train=cfg.num_diffusion_steps_train
         )
+        # Set number of diffusion steps for inference
+        action_head.noise_scheduler.set_timesteps(cfg.num_diffusion_steps_inference)
     else:
         raise ValueError("Either use_l1_regression or use_diffusion must be True")
 
@@ -496,6 +499,7 @@ def get_action_head(cfg: Any, llm_dim: int) -> Union[L1RegressionActionHead, Dif
             "moojink/openvla-7b-oft-finetuned-libero-object": "action_head--150000_checkpoint.pt",
             "moojink/openvla-7b-oft-finetuned-libero-goal": "action_head--50000_checkpoint.pt",
             "moojink/openvla-7b-oft-finetuned-libero-10": "action_head--150000_checkpoint.pt",
+            "moojink/openvla-7b-oft-finetuned-libero-spatial-object-goal-10": "action_head--300000_checkpoint.pt",
         }
         if cfg.pretrained_checkpoint not in model_path_to_action_head_name.keys():
             raise ValueError("Unsupported HF Hub pretrained checkpoint found!")
@@ -790,8 +794,8 @@ def get_vla_action(
                 use_film=use_film,
             )
 
-    # Extract subset of actions for open loop steps
-    return [action[i] for i in range(min(len(action), cfg.num_open_loop_steps))]
+    # Return action chunk as list of actions
+    return [action[i] for i in range(len(action))]
 
 
 def get_action_from_server(

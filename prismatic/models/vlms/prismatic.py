@@ -617,5 +617,5 @@ class PrismaticVLM(VLM):
             # fmt: on
 
         generated_text = tokenizer.decode(generated_ids[0, input_ids.shape[1] :], skip_special_tokens=True).strip()
-
+        
         return generated_text

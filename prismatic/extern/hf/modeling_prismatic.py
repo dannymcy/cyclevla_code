@@ -804,8 +804,6 @@ class OpenVLAForActionPrediction(PrismaticForConditionalGeneration):
         noisy_action_projector,
     ):
         """Run diffusion-based action prediction"""
-        # Set diffusion timestep values
-        action_head.noise_scheduler.set_timesteps(action_head.num_diffusion_steps)
         # Clone embedding for reuse in each timestep
         orig_projected_patch_embeddings = projected_patch_embeddings.clone()
         curr_noisy_actions = noise

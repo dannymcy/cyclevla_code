@@ -1,8 +1,22 @@
 """
-run_libero_eval.py
+run_libero_eval_decomposed_progress_transit.py
 
-Evaluates a trained policy in a LIBERO simulation benchmark task suite.
+Baseline subtask-transit-only LIBERO eval.
+
+Drives the same 9-dim policy as `..._mbr.py` but with no VLM, no backtrack,
+and no MBR — subtasks are advanced purely on the policy's stop signal
+(`termination_signal == -1`). Used to measure the raw subtask-transit
+success rate of the trained 9-dim VLA in isolation, i.e. the ablation
+"no proactive correction" point in the paper.
 """
+
+# watch -n 1 nvidia-smi
+# conda activate /hdd2/kai/openvla-oft/env
+
+# CUDA_VISIBLE_DEVICES="2" python experiments/robot/libero/run_libero_eval_decomposed_progress_transit.py   --pretrained_checkpoint /hdd2/kai/openvla-oft/checkpoints/libero/libero_sub_decomposed_progress_A100/openvla-7b+libero_decomposed_progress+b16+lr-0.0005+lora-r32+dropout-0.0--image_aug--parallel_dec--8_acts_chunk--continuous_acts--diffusion--3rd_person_img--wrist_img--proprio_state--50000_chkpt   --task_suite_name libero_spatial
+# CUDA_VISIBLE_DEVICES="2" python experiments/robot/libero/run_libero_eval_decomposed_progress_transit.py   --pretrained_checkpoint /hdd2/kai/openvla-oft/checkpoints/libero/libero_sub_decomposed_progress_A100/openvla-7b+libero_decomposed_progress+b16+lr-0.0005+lora-r32+dropout-0.0--image_aug--parallel_dec--8_acts_chunk--continuous_acts--diffusion--3rd_person_img--wrist_img--proprio_state--50000_chkpt   --task_suite_name libero_object
+# CUDA_VISIBLE_DEVICES="2" python experiments/robot/libero/run_libero_eval_decomposed_progress_transit.py   --pretrained_checkpoint /hdd2/kai/openvla-oft/checkpoints/libero/libero_sub_decomposed_progress_A100/openvla-7b+libero_decomposed_progress+b16+lr-0.0005+lora-r32+dropout-0.0--image_aug--parallel_dec--8_acts_chunk--continuous_acts--diffusion--3rd_person_img--wrist_img--proprio_state--50000_chkpt   --task_suite_name libero_goal
+# CUDA_VISIBLE_DEVICES="2" python experiments/robot/libero/run_libero_eval_decomposed_progress_transit.py   --pretrained_checkpoint /hdd2/kai/openvla-oft/checkpoints/libero/libero_sub_decomposed_progress_A100/openvla-7b+libero_decomposed_progress+b16+lr-0.0005+lora-r32+dropout-0.0--image_aug--parallel_dec--8_acts_chunk--continuous_acts--diffusion--3rd_person_img--wrist_img--proprio_state--50000_chkpt   --task_suite_name libero_10
 
 import json
 import logging
@@ -22,14 +36,17 @@ from libero.libero import benchmark
 import wandb
 
 # Append current directory so that interpreter can find experiments.robot
-sys.path.append("../..")
+# sys.path.append("../..")
+ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../"))
+sys.path.append(ROOT_DIR)
+
 from experiments.robot.libero.libero_utils import (
     get_libero_dummy_action,
     get_libero_env,
     get_libero_image,
     get_libero_wrist_image,
     quat2axisangle,
-    save_rollout_video,
+    save_rollout_video_decomposed,
 )
 from experiments.robot.openvla_utils import (
     get_action_head,
@@ -39,6 +56,7 @@ from experiments.robot.openvla_utils import (
     resize_image_for_policy,
 )
 from experiments.robot.robot_utils import (
+    DATE,
     DATE_TIME,
     get_action,
     get_image_resize_size,
@@ -48,6 +66,38 @@ from experiments.robot.robot_utils import (
     set_seed_everywhere,
 )
 from prismatic.vla.constants import NUM_ACTIONS_CHUNK
+
+from fsm_utils.build import *
+from fsm_utils.utils import *
+
+
+
+def pick_place_states(language_instruction, task_suite):
+    if task_suite == "libero_spatial_no_noops":
+        pick_object_full, pick_object_simple, place_object = extract_pick_place_libero_spatial(language_instruction)
+        fsm, states = fsm_pick_place_libero_spatial(pick_object_full, pick_object_simple, place_object)
+    elif task_suite == "libero_object_no_noops":
+        pick_object, place_object = extract_pick_place_libero_object(language_instruction)
+        fsm, states = fsm_pick_place_libero_object(pick_object, place_object)
+    elif task_suite == "libero_goal_no_noops":
+        pick_object, place_object = extract_pick_place_libero_goal(language_instruction)
+        if pick_object is not None:
+            fsm, states = fsm_pick_place_libero_goal(pick_object, place_object)
+        else:
+            return None
+    elif task_suite == "libero_10_no_noops":
+        pick_object, place_object = extract_pick_place_libero_10(language_instruction)
+        if pick_object is not None:
+            fsm, states = fsm_pick_place_libero_10(pick_object, place_object)
+        else:
+            return None
+
+    return states
+
+
+def complex_states(language_instruction, task_suite):
+    fsm, states = fsm_complex_libero(language_instruction, task_suite)
+    return states
 
 
 # Define task suite constants
@@ -88,15 +138,18 @@ class GenerateConfig:
     model_family: str = "openvla"                    # Model family
     pretrained_checkpoint: Union[str, Path] = ""     # Pretrained checkpoint path
 
-    use_l1_regression: bool = True                   # If True, uses continuous action head with L1 regression objective
-    use_diffusion: bool = False                      # If True, uses continuous action head with diffusion modeling objective (DDIM)
-    num_diffusion_steps: int = 50                    # (When `diffusion==True`) Number of diffusion steps for inference
+    use_l1_regression: bool = False                  # If True, uses continuous action head with L1 regression objective
+    use_diffusion: bool = True                       # If True, uses continuous action head with diffusion modeling objective (DDIM)
+    num_diffusion_steps_train: int = 50              # (When `diffusion==True`) Number of diffusion steps used for training
+    num_diffusion_steps_inference: int = 50          # (When `diffusion==True`) Number of diffusion steps used for inference
     use_film: bool = False                           # If True, uses FiLM to infuse language inputs into visual features
     num_images_in_input: int = 2                     # Number of images in the VLA input (default: 1)
     use_proprio: bool = True                         # Whether to include proprio state in input
 
     center_crop: bool = True                         # Center crop? (if trained w/ random crop image aug)
     num_open_loop_steps: int = 8                     # Number of actions to execute open-loop before requerying policy
+
+    lora_rank: int = 32                              # Rank of LoRA weight matrix (MAKE SURE THIS MATCHES TRAINING!)
 
     unnorm_key: Union[str, Path] = ""                # Action un-normalization key
 
@@ -108,21 +161,22 @@ class GenerateConfig:
     #################################################################################################################
     task_suite_name: str = TaskSuite.LIBERO_SPATIAL  # Task suite
     num_steps_wait: int = 10                         # Number of steps to wait for objects to stabilize in sim
-    num_trials_per_task: int = 50                    # Number of rollouts per task
+    num_trials_per_task: int = 10                    # Number of rollouts per task (50)
     initial_states_path: str = "DEFAULT"             # "DEFAULT", or path to initial states JSON file
-    env_img_res: int = 256                           # Resolution for environment images (not policy input resolution)
+    env_img_res: int = 1024                          # Resolution for environment images (not policy input resolution)
 
     #################################################################################################################
     # Utils
     #################################################################################################################
     run_id_note: Optional[str] = None                # Extra note to add to end of run ID for logging
-    local_log_dir: str = "./experiments/logs"        # Local directory for eval logs
+    local_log_dir: str = "./experiments/logs/logs_sub_decomposed_progress_transit_50000_chkpt"        # Local directory for eval logs
+    video_save_dir: str = "./rollouts/rollouts_sub_decomposed_progress_transit_50000_chkpt"
 
     use_wandb: bool = False                          # Whether to also log results in Weights & Biases
     wandb_entity: str = "your-wandb-entity"          # Name of WandB entity
     wandb_project: str = "your-wandb-project"        # Name of WandB project
 
-    seed: int = 7                                    # Random Seed (for reproducibility)
+    seed: int = 0                                    # Random Seed (for reproducibility)
 
     # fmt: on
 
@@ -177,6 +231,12 @@ def check_unnorm_key(cfg: GenerateConfig, model) -> None:
     """Check that the model contains the action un-normalization key."""
     # Initialize unnorm_key
     unnorm_key = cfg.task_suite_name
+    if "decomposed" in cfg.pretrained_checkpoint:
+        unnorm_key = "libero_decomposed"
+    if "decomposed" in cfg.pretrained_checkpoint and "oversample" in cfg.pretrained_checkpoint:
+        unnorm_key = "libero_decomposed_oversample"
+    elif "decomposed" in cfg.pretrained_checkpoint and "progress" in cfg.pretrained_checkpoint:
+        unnorm_key = "libero_decomposed_progress"
 
     # In some cases, the key must be manually modified (e.g. after training on a modified version of the dataset
     # with the suffix "_no_noops" in the dataset name)
@@ -259,17 +319,19 @@ def prepare_observation(obs, resize_size):
     return observation, img  # Return both processed observation and original image for replay
 
 
-def process_action(action, model_family):
+def process_action(action, model_family, stop=False, progress=False):
     """Process action before sending to environment."""
     # Normalize gripper action [0,1] -> [-1,+1] because the environment expects the latter
-    action = normalize_gripper_action(action, binarize=True)
+    # print(action)
+    action = normalize_gripper_action(action, binarize=True, stop=stop, progress=progress)
 
     # [OpenVLA] The dataloader flips the sign of the gripper action to align with other datasets
     # (0 = close, 1 = open), so flip it back (-1 = open, +1 = close) before executing the action
+    # (0 = go, 1 = stop), flip it back (-1 = stop, +1 = go) following the gripper
     if model_family == "openvla":
-        action = invert_gripper_action(action)
+        action = invert_gripper_action(action, stop=stop, progress=progress)
 
-    return action
+    return action.tolist()
 
 
 def run_episode(
@@ -286,6 +348,12 @@ def run_episode(
     log_file=None,
 ):
     """Run a single episode in the environment."""
+    # Get subtasks
+    states = pick_place_states(task_description, f"{cfg.task_suite_name}_no_noops")
+    states = complex_states(task_description, f"{cfg.task_suite_name}_no_noops") if states is None else states
+    states = [state.lower() for state in states]
+    subtask_list = [f"Task: {task_description}. The current subtask: {state}" for state in states]
+
     # Reset environment
     env.reset()
 
@@ -298,62 +366,130 @@ def run_episode(
     # Initialize action queue
     if cfg.num_open_loop_steps != NUM_ACTIONS_CHUNK:
         print(f"WARNING: cfg.num_open_loop_steps ({cfg.num_open_loop_steps}) does not match the NUM_ACTIONS_CHUNK "
-               "{NUM_ACTIONS_CHUNK} constant defined in prismatic.vla.constants! For best performance (in terms of "
+              f"({NUM_ACTIONS_CHUNK}) constant defined in prismatic.vla.constants! For best performance (in terms of "
                "both speed and success rate), we recommend executing the full action chunk.")
     action_queue = deque(maxlen=cfg.num_open_loop_steps)
 
     # Setup
     t = 0
-    replay_images = []
+    replay_images, replay_subtasks = [], []
     max_steps = TASK_MAX_STEPS[cfg.task_suite_name]
+
+    # Progress signal threshold
+    progress_threshold = 0.97
 
     # Run episode
     success = False
     try:
-        while t < max_steps + cfg.num_steps_wait:
-            # Do nothing for the first few timesteps to let objects stabilize
-            if t < cfg.num_steps_wait:
-                obs, reward, done, info = env.step(get_libero_dummy_action(cfg.model_family))
+        for subtask_idx, (current_subtask, current_state) in enumerate(zip(subtask_list, states)):
+            if success:
+                break  # Exit full task loop once done is True
+
+            t = 0
+            # Progress signal tracking - reset for each subtask
+            first_high_seen = False
+            consecutive_high_count = 0
+            steps_since_last_high = 0
+
+            # Prevent carry-over actions from previous subtask
+            action_queue.clear()
+            
+            while t < max_steps // len(states) * 1.5 + cfg.num_steps_wait:
+            # while t < max_steps + cfg.num_steps_wait:
+                if t == 0:
+                    log_message(f"Starting subtask: {current_state}", log_file)
+
+                # Do nothing for the first few timesteps to let objects stabilize
+                if t < cfg.num_steps_wait and subtask_idx == 0:
+                    obs, reward, done, info = env.step(get_libero_dummy_action(cfg.model_family))
+                    t += 1
+                    continue
+
+                # Prepare observation
+                observation, img = prepare_observation(obs, resize_size)
+                replay_images.append(img)
+                replay_subtasks.append(current_state)
+
+                # If action queue is empty, requery model
+                if len(action_queue) == 0:
+                    actions = get_action(
+                        cfg,
+                        model,
+                        observation,
+                        current_state,
+                        processor=processor,
+                        action_head=action_head,
+                        proprio_projector=proprio_projector,
+                        noisy_action_projector=noisy_action_projector,
+                        use_film=cfg.use_film,
+                    )
+                    action_queue.extend(actions)
+
+                # Get and process next action
+                action = process_action(action_queue.popleft(), cfg.model_family, stop=True, progress=True)
+                print(action)
+
+                # Step environment
+                termination_signal = action[-2]
+                progress_signal = action[-1]
+                obs, reward, done, info = env.step(action[:-2])
                 t += 1
-                continue
 
-            # Prepare observation
-            observation, img = prepare_observation(obs, resize_size)
-            replay_images.append(img)
+                if done:
+                    success = True
+                    log_message(f"Finished subtask: {current_state} in {t} steps", log_file)
+                    break  # Exit subtask loop
 
-            # If action queue is empty, requery model
-            if len(action_queue) == 0:
-                # Query model to get action
-                actions = get_action(
-                    cfg,
-                    model,
-                    observation,
-                    task_description,
-                    processor=processor,
-                    action_head=action_head,
-                    proprio_projector=proprio_projector,
-                    noisy_action_projector=noisy_action_projector,
-                    use_film=cfg.use_film,
-                )
-                action_queue.extend(actions)
+                # Enhanced progress signal logic
+                if termination_signal == -1:
+                    consecutive_high_count += 1
 
-            # Get action from queue
-            action = action_queue.popleft()
+                    if not first_high_seen:
+                        first_high_seen = True
+                        log_message(
+                            f"Termination signal observed at step {t} for subtask: {current_state} "
+                            f"(term={termination_signal}, progress={progress_signal:.2f}).",
+                            log_file,
+                        )
 
-            # Process action
-            action = process_action(action, cfg.model_family)
-
-            # Execute action in environment
-            obs, reward, done, info = env.step(action.tolist())
-            if done:
-                success = True
-                break
-            t += 1
+                    # Break conditions (re-using previous robustness pattern)
+                    if consecutive_high_count >= 2:
+                        # Consecutive STOP confirmations
+                        log_message(
+                            f"Finished subtask: {current_state} at step {t} "
+                            f"({consecutive_high_count} consecutive termination signals, "
+                            f"latest term={termination_signal}, progress={progress_signal:.2f}).",
+                            log_file,
+                        )
+                        break
+                    elif first_high_seen and steps_since_last_high >= 2:
+                        # STOP recurs after at least 2 "low" steps
+                        log_message(
+                            f"Finished subtask: {current_state} at step {t} "
+                            f"(termination re-confirmed after {steps_since_last_high} low steps; "
+                            f"term={termination_signal}, progress={progress_signal:.2f}).",
+                            log_file,
+                        )
+                        break
+                    else:
+                        if first_high_seen and steps_since_last_high > 0:
+                            log_message(
+                                f"Ignoring termination re-signal at step {t} "
+                                f"(only {steps_since_last_high} low steps since last; need 2+).",
+                                log_file,
+                            )
+                        # Reset the low-signal counter on a high
+                        steps_since_last_high = 0
+                else:
+                    # Low (no termination), maintain robustness counters
+                    consecutive_high_count = 0
+                    if first_high_seen:
+                        steps_since_last_high += 1
 
     except Exception as e:
         log_message(f"Episode error: {e}", log_file)
 
-    return success, replay_images
+    return success, replay_images, replay_subtasks
 
 
 def run_task(
@@ -405,7 +541,7 @@ def run_task(
         log_message(f"Starting episode {task_episodes + 1}...", log_file)
 
         # Run episode
-        success, replay_images = run_episode(
+        success, replay_images, replay_subtasks = run_episode(
             cfg,
             env,
             task_description,
@@ -427,8 +563,9 @@ def run_task(
             total_successes += 1
 
         # Save replay video
-        save_rollout_video(
-            replay_images, total_episodes, success=success, task_description=task_description, log_file=log_file
+        save_rollout_video_decomposed(
+            replay_images, total_episodes, success=success, task_description=task_description, 
+            video_save_dir=os.path.join(cfg.video_save_dir, cfg.task_suite_name), log_file=log_file, subtasks=replay_subtasks
         )
 
         # Log results

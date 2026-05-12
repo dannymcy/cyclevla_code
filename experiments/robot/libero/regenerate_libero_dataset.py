@@ -23,6 +23,12 @@ Usage:
 
 """
 
+# python experiments/robot/libero/regenerate_libero_dataset.py --libero_task_suite libero_spatial  --libero_raw_data_dir ./LIBERO/libero/libero/datasets/libero_spatial_raw  --libero_target_dir ./LIBERO/libero/libero/datasets/libero_spatial
+# python experiments/robot/libero/regenerate_libero_dataset.py --libero_task_suite libero_goal  --libero_raw_data_dir ./LIBERO/libero/libero/datasets/libero_goal_raw  --libero_target_dir ./LIBERO/libero/libero/datasets/libero_goal
+# python experiments/robot/libero/regenerate_libero_dataset.py --libero_task_suite libero_object  --libero_raw_data_dir ./LIBERO/libero/libero/datasets/libero_object_raw  --libero_target_dir ./LIBERO/libero/libero/datasets/libero_object
+# python experiments/robot/libero/regenerate_libero_dataset.py --libero_task_suite libero_10  --libero_raw_data_dir ./LIBERO/libero/libero/datasets/libero_10_raw  --libero_target_dir ./LIBERO/libero/libero/datasets/libero_10
+# python experiments/robot/libero/regenerate_libero_dataset.py --libero_task_suite libero_90  --libero_raw_data_dir ./LIBERO/libero/libero/datasets/libero_90_raw  --libero_target_dir ./LIBERO/libero/libero/datasets/libero_90
+
 import argparse
 import json
 import os
