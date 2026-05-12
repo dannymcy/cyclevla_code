@@ -102,6 +102,17 @@ class VLMDetector:
         self.model_name = model_name
         self.temperature = temperature
 
+        # If in region that cannot access OpenAI API
+        # api_key = os.environ.get('ZENMUX_OPENAI_API_KEY')
+        # if not api_key:
+        #     raise ValueError("ZenMux API key not found. Set ZENMUX_OPENAI_API_KEY environment variable.")
+        # self.client = OpenAI(
+        #     api_key=api_key,
+        #     base_url="https://zenmux.ai/api/v1"  # Add this
+        # )
+        # self.model_name = model_name
+        # self.temperature = temperature
+
     def encode_image(self, input_img):
         if input_img is None:
             raise ValueError("Image loading failed.")

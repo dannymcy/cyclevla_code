@@ -107,6 +107,7 @@ celerybeat.pid
 env/
 env_2/
 env_3/
+env-plus/
 venv/
 ENV/
 env.bak/
@@ -167,6 +168,7 @@ vlm_response/
 
 # LIBERO simulation
 LIBERO/
+LIBERO-plus/
 
 # Others
 transfer_server.sh
