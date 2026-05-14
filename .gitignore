@@ -172,6 +172,8 @@ LIBERO-plus/
 
 # Others
 transfer_server.sh
+transfer_server_openpi.sh
+transfer_server_openvla-oft.sh
 main.py
 CLAUDE.md
 .claude/
