@@ -54,9 +54,9 @@ Note: the default LIBERO-Plus eval protocol is `--num_trials_per_task 1` (vs. 50
 
 ## Generate Subtask-Decomposed LIBERO Dataset
 
-**Option A:** download our pre-generated dataset (coming soon) and extract it to `decomposed_dataset/libero_sub_progress/` at the repo root, so it matches the Stage-3 output path Option B would produce.
+**Option A (recommanded):** download our pre-generated dataset (coming soon) and extract it to `decomposed_dataset/libero_sub_progress/` at the repo root, so it matches the Stage-3 output path Option B would produce.
 
-**Option B:** regenerate from the original `modified_libero_rlds`. The pipeline runs in three stages. Adjust `--task-suite-id` (0=spatial, 1=object, 2=goal, 3=10) per suite, and run each stage four times to cover all four suites.
+**Option B:** regenerate from the original `modified_libero_rlds`. The pipeline runs in three stages. Adjust `--task-suite-id` (0=spatial, 1=object, 2=goal, 3=10) per suite, and run stage 1 and 2 four times to cover all four suites.
 
 ```bash
 conda activate /hdd2/kai/openvla-oft/env
@@ -71,7 +71,7 @@ CUDA_VISIBLE_DEVICES=0 python ecot_scripts/generate_embodied_data/bounding_boxes
 #        vlm_response/process_traj/libero/{task_suite}/episode_*[_llm]/chunks_summary.json
 CUDA_VISIBLE_DEVICES=0,1,2 python ecot_scripts/generate_embodied_data/decompose_traj.py --task-suite-id 0 --vlm gpt
 
-# Stage 3 — build the official RLDS dataset (LIBERO_Decomposed_Progress, subtask-only instruction)
+# Stage 3 — build the official RLDS dataset (LIBERO_Decomposed_Progress, subtask-only instruction, run once)
 #   in:  modified_libero_rlds + Stage-2 process_traj/.../chunks_summary.json
 #   out: decomposed_dataset/libero_sub_progress/libero_decomposed_progress/1.0.0/*.tfrecord-*
 cd rlds_dataset_builder/LIBERO_Decomposed_Progress

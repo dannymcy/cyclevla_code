@@ -99,6 +99,7 @@ def vlm_init(model_name="meta-llama/Llama-3.2-11B-Vision-Instruct"):
     return [model, tokenizer, processor]
 
 
+# deprecated, need a newer version of transformer package that does not work with openvla-oft backbone
 def vlm_inference_mllama(model, tokenizer, processor, prompt, image=None, max_new_tokens=64, temperature=0.2):
         # Construct message for Llama-3 Vision
         messages = [{"role": "user", "content": []}]
@@ -130,6 +131,7 @@ def vlm_inference_mllama(model, tokenizer, processor, prompt, image=None, max_ne
         return generated_text
 
 
+# deprecated, need a newer version of transformer package that does not work with openvla-oft backbone
 def vlm_inference_qwen(save_path, model, tokenizer, processor, prompt, images=None, max_new_tokens=64, temperature=0.2, image_size=(256, 256)):
     """
     Run inference with Qwen2.5-VL or similar VLM models supporting multiple images.

@@ -34,9 +34,9 @@ pip install "flash-attn==2.5.5" --no-build-isolation
 pip install openai pyzmq scikit-learn pandas openpyxl python-dotenv transitions tensorflow_hub apache_beam plotly
 ```
 
-## Set Up Conda Environment for pi0.5 (openpi)
+## Set Up uv Environment for pi0.5 (openpi)
 
-Follow the setup in https://github.com/Physical-Intelligence/openpi (this repo vendors openpi as a submodule under `openpi/`).
+Follow the setup in https://github.com/Physical-Intelligence/openpi (this repo vendors openpi as a submodule under `openpi/`). NOTE: also run `uv sync --group rlds` from `openpi/` to install the optional `tensorflow-datasets` group required by `examples/libero/convert_libero_data_to_lerobot_cyclevla.py`.
 
 ## Set Up API Keys (.env)
 

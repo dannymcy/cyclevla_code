@@ -269,7 +269,7 @@ parser.add_argument("--save-path", default="/hdd2/kai/openvla-oft/vlm_response")
 parser.add_argument("--dataset", default="libero")  # ["libero", "bridge"]
 parser.add_argument("--task-suite-id", default=0, type=int)  # [0, 1, 2, 3]
 parser.add_argument("--seed", default=0, type=int)
-parser.add_argument("--vlm", default="Qwen/Qwen2.5-VL-7B-Instruct", type=str)  # ["gpt", "Qwen/Qwen2.5-VL-7B-Instruct"]
+parser.add_argument("--vlm", default="gpt", type=str)  # ["gpt", "Qwen/Qwen2.5-VL-7B-Instruct"]
 args = parser.parse_args()
 
 device = f"cuda:{args.gpu}"
