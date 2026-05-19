@@ -97,7 +97,7 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 # TODO: For rent server
 # CUDA_VISIBLE_DEVICES="0,1,2,3" torchrun --standalone --nnodes 1 --nproc-per-node 4 vla-scripts/finetune_progress.py \
-#   --vla_path moojink/openvla-7b-oft-finetuned-libero-spatial-object-goal-10 \
+#   --vla_path openvla/openvla-7b \
 #   --data_root_dir "/home/to0space/ygy/openvla-oft/decomposed_dataset/libero_sub_progress/" \
 #   --dataset_name libero_decomposed_progress \
 #   --run_root_dir "/home/to0space/ygy/openvla-oft/checkpoints/libero/libero_sub_decomposed_progress_A100/" \
@@ -108,13 +108,13 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 #   --use_proprio True \
 #   --batch_size 2 \
 #   --learning_rate 5e-4 \
-#   --num_steps_before_decay 100000 \
+#   --num_steps_before_decay 335000 \
 #   --max_steps 500005 \
-#   --save_freq 25000 \
+#   --save_freq 50000 \
 #   --save_latest_checkpoint_only False \
 #   --image_aug True \
 #   --lora_rank 32 \
-#   --grad_accumulation_steps 4 \
+#   --grad_accumulation_steps 8 \
 #   --wandb_entity "dannymcy-university-of-oxford" \
 #   --wandb_project "CycleVLA_libero_sub_decomposed_progress_oft_A100" \
 #   --run_id_note parallel_dec--8_acts_chunk--continuous_acts--diffusion--3rd_person_img--wrist_img--proprio_state
