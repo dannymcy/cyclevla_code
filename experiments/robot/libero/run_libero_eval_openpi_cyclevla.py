@@ -148,7 +148,7 @@ class GenerateConfig:
     #################################################################################################################
     progress_threshold: float = 0.90                 # Progress signal level that triggers the VLM check
     max_subtask_retries: int = 3                     # Max backtrack/retry attempts per subtask
-    vlm_model: str = "gpt-5.2"                       # VLM used for the transit/backtrack decision
+    vlm_model: str = "gpt-5.5"                       # VLM used for the transit/backtrack decision
     vlm_temperature: float = 1.0                     # VLM sampling temperature
 
     # MBR (Minimum Bayes Risk) decoding on backtrack -- the test-time-scaling

@@ -13,6 +13,10 @@
 | `experiments/robot/libero/libero_utils.py` | LIBERO env / image / state utilities reused by every eval script. |
 | `experiments/robot/openvla_utils.py` | OpenVLA-specific eval utilities. |
 | `experiments/robot/robot_utils.py` | Shared (non-OpenVLA) eval utilities. |
+| `experiments/robot/libero_plus_utils.py` | LIBERO-Plus helpers: perturbation-category lookup, canonical-task recovery (incl. the Language-category GPT matcher), and variant sub-sampling. |
+| `experiments/robot/libero-plus/run_libero_plus_eval_decomposed_progress_transit.py` | LIBERO-Plus transit-only baseline eval (Stage 1). |
+| `experiments/robot/libero-plus/run_libero_plus_eval_decomposed_progress_mbr.py` | LIBERO-Plus full-method eval (Stage 2) — VLM transit/backtrack + MBR. |
+| `experiments/robot/libero-plus/run_libero_plus_eval.sh` | Turnkey two-stage launcher for one (suite, category) slice on one GPU. |
 
 ## Finetuning
 
@@ -86,6 +90,27 @@ Notes:
 * **`--center_crop True` is required** — OFT was finetuned with random 90%-area crops, so eval takes the center 90% crop. The script asserts this.
 * Set `--use_wandb True` with `--wandb_project` / `--wandb_entity` to also log to W&B (results are logged locally by default).
 * We use the transformers v4.40.1 fork at https://github.com/moojink/transformers-openvla-oft.git — other versions may shift results slightly.
+
+## Launching LIBERO-Plus Evaluations
+
+[LIBERO-Plus](https://github.com/sylvestf/LIBERO-plus) is a robustness benchmark — each of the 4 suites expands to ~2,400 perturbed task variants across 7 categories (Camera, Robot, Language, Light, Background, Noise, Layout; 10,030 total). It is a drop-in LIBERO fork run in the separate `openvla-oft-plus` env (see [LIBERO.md](LIBERO.md)); we evaluate the **same checkpoint** as above. Same two-stage flow (transit → full method), `num_trials_per_task=1`, results reported **per category** under `rollouts-plus/`.
+
+```bash
+conda activate openvla-oft-plus
+
+# run_libero_plus_eval.sh <gpu_id> <task_suite|all> <category> [eval_fraction]
+# One (suite, category) slice on one GPU:
+experiments/robot/libero-plus/run_libero_plus_eval.sh 0 libero_spatial camera
+# A category across ALL 4 suites on one GPU, sub-sampled to 10%:
+experiments/robot/libero-plus/run_libero_plus_eval.sh 1 all language 10
+```
+
+`<task_suite>` may be a single suite or `all` (loops the 4 standard suites). Run multiple
+invocations on different GPUs — e.g. one category each — to cover all 7 categories in parallel.
+
+Notes:
+* `--category` picks one of the 7 categories (or `all`); `--eval_fraction` (10..100, default 100) uniformly sub-samples variants within a category — valid because each variant is itself an independent perturbation draw; `100` is the paper's full protocol. Transit and mbr stages must share `--category` / `--eval_fraction` / `--seed`.
+* Other LIBERO-eval notes (`--center_crop True`, the transformers fork, `--rerun_all`) apply unchanged.
 
 ## MBR Analysis
 

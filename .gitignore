@@ -158,7 +158,9 @@ embodied_features_bridge/
 # Rollout videos and wandb logs
 rollouts/
 rollouts_deprecated/
+rollouts-plus/
 wandb/
+experiments/robot/libero-plus/task_instruction_mapping_*.json
 
 # Checkpoints
 checkpoints/
@@ -176,4 +178,4 @@ transfer_server_openpi.sh
 transfer_server_openvla-oft.sh
 main.py
 CLAUDE.md
-.claude/
+.claude/experiments/robot/libero-plus/task_instruction_mapping_*.json
