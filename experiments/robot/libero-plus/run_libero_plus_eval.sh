@@ -87,3 +87,8 @@ for SUITE in "${SUITES[@]}"; do
 
   echo "[${SUITE}/${CATEGORY}] done"
 done
+
+# Refresh the per-category aggregate logs (7 per stage) that sum across the 4 suites.
+# Idempotent and cheap; `|| true` so a parse hiccup never fails the eval run.
+echo "[aggregate] refreshing AGGREGATE-*.txt per-category logs across suites"
+python experiments/robot/libero-plus/aggregate_plus_logs.py || true
