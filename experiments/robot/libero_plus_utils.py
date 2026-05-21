@@ -85,6 +85,12 @@ PLUS_CATEGORY_COUNTS = {
 }
 
 LANGUAGE_CATEGORY = "Language Instructions"
+NOISE_CATEGORY = "Sensor Noise"
+
+# LIBERO-Plus's sensor-noise corruptions (`fog` builds a fixed 256x256 `plasma_fractal`,
+# and the other corruptions' severities are calibrated for 256x256) require the agentview
+# to be rendered at 256x256 — see `env_render_resolution` below.
+NOISE_RENDER_RESOLUTION = 256
 
 # Paths resolved relative to this file (experiments/robot/libero_plus_utils.py).
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -386,6 +392,22 @@ def rollout_label(category, env, canonical_instruction):
     if normalize_category(category) == LANGUAGE_CATEGORY:
         return get_plus_clean_instruction(env)
     return canonical_instruction
+
+
+def env_render_resolution(category, default_res):
+    """Camera render resolution (`camera_heights`/`camera_widths`) for a LIBERO-Plus variant.
+
+    The Noise category MUST render at 256x256: LIBERO-Plus's sensor-noise corruptions in
+    `env_wrapper.py` are written for that size — `fog` adds a hardcoded 256x256
+    `plasma_fractal` (so a 1024x1024 agentview hits a broadcast error), and the other
+    corruptions' severity params are calibrated for 256x256. The other 6 categories use
+    `default_res` (the eval's `--env_img_res`, default 1024) for higher-quality video.
+    This only affects the source render / saved-video size — the policy input is resized
+    to 224 regardless.
+    """
+    if normalize_category(category) == NOISE_CATEGORY:
+        return NOISE_RENDER_RESOLUTION
+    return default_res
 
 
 # ---------------------------------------------------------------------------

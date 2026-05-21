@@ -92,6 +92,7 @@ from prismatic.vla.constants import NUM_ACTIONS_CHUNK
 from experiments.robot.libero_plus_utils import (
     PLUS_CATEGORY_COUNTS,
     category_slug,
+    env_render_resolution,
     normalize_category,
     resolve_canonical_task,
     rollout_label,
@@ -1623,7 +1624,12 @@ def run_task(
     # Initialize environment. The LIBERO-Plus env applies the perturbation automatically
     # from the task name. `task.language` is filename-derived/dirty for LIBERO-Plus, so we
     # discard it and recover the canonical FSM-style instruction explicitly below.
-    env, _ = get_libero_env(task, cfg.model_family, resolution=cfg.env_img_res)
+    # The Noise category must render at 256 (its corruptions are 256-bound); the other 6
+    # categories use cfg.env_img_res (default 1024).
+    env, _ = get_libero_env(
+        task, cfg.model_family,
+        resolution=env_render_resolution(category, cfg.env_img_res),
+    )
     task_description = resolve_canonical_task(
         task.name, category, env, cfg.task_suite_name, cfg.instruction_cache_dir,
         log_fn=lambda m: log_message(m, log_file),
