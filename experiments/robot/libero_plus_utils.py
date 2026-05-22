@@ -123,11 +123,14 @@ def _normalize(s):
     return s
 
 
-# A perturbation suffix always begins with one of these markers *followed by a digit*
-# (e.g. `_table_1`, `_view_0_0_100_2_352`, `_language_2`, `_level1_sample1`). The digit
-# requirement is essential: base task names legitimately contain words like
+# A perturbation suffix begins with one of these markers. Most are a marker word + a digit
+# (e.g. `_table_1`, `_view_0_0_100_2_352`, `_language_2`, `_level1_sample1`); the digit
+# requirement is essential — base task names legitimately contain words like
 # `..._from_table_center_...`, where `_table_` is NOT a suffix because "center" follows.
-_SUFFIX_RE = re.compile(r"_(?:table|tb|light|language|view|add|noise)_\d|_level\d")
+# The Objects Layout category additionally prefixes its `_levelK_sampleN` suffix with a
+# bare `_moved` token (`..._moved_level1_sample1`); no base LIBERO task name contains
+# "moved", so it is matched literally as `_moved` followed by `_` or end-of-string.
+_SUFFIX_RE = re.compile(r"_(?:table|tb|light|language|view|add|noise)_\d|_level\d|_moved(?=_|$)")
 
 
 def strip_perturbation_suffix(task_name):
