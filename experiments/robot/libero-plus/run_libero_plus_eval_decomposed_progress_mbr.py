@@ -88,14 +88,17 @@ from experiments.robot.robot_utils import (
 from prismatic.vla.constants import NUM_ACTIONS_CHUNK
 
 # LIBERO-Plus-specific helpers: perturbation-category lookup, canonical-task recovery
-# (incl. the Language-category GPT matcher), and variant sub-sampling.
+# (incl. the Language-category GPT matcher), variant sub-sampling, and the sidecar
+# progress-file helpers that let an interrupted run resume where it left off.
 from experiments.robot.libero_plus_utils import (
     PLUS_CATEGORY_COUNTS,
     category_slug,
     env_render_resolution,
+    load_or_init_progress,
     normalize_category,
     resolve_canonical_task,
     rollout_label,
+    save_progress,
     select_plus_tasks,
 )
 
@@ -571,19 +574,34 @@ def check_unnorm_key(cfg: GenerateConfig, model) -> None:
     cfg.unnorm_key = unnorm_key
 
 
-def setup_logging(cfg: GenerateConfig):
-    """Set up logging to file and optionally to wandb."""
-    # Create run ID (includes the LIBERO-Plus category + sub-sample fraction)
+def _default_log_filename(cfg: GenerateConfig) -> str:
+    """Build the EVAL-*.txt basename for a fresh run. Kept as its own helper so
+    `load_or_init_progress` can be passed it as the fallback filename when no sidecar
+    progress file exists yet."""
     run_id = (f"EVAL-{cfg.task_suite_name}-{category_slug(normalize_category(cfg.category)) if cfg.category != 'all' else 'all'}"
               f"-frac{cfg.eval_fraction}-{cfg.model_family}-{DATE_TIME}")
     if cfg.run_id_note is not None:
         run_id += f"--{cfg.run_id_note}"
+    return run_id + ".txt"
+
+
+def setup_logging(cfg: GenerateConfig, log_filename: str, log_mode: str):
+    """Set up logging to file and optionally to wandb.
+
+    The caller resolves `log_filename` (either the newly-generated one from
+    `_default_log_filename` for a fresh run, or the one persisted in `.progress.json`
+    on resume) so the same EVAL-*.txt gets appended to across restarts — keeping
+    aggregate_plus_logs.py seeing exactly one log per (suite, category). `log_mode` is
+    "w" for fresh, "a" for resume.
+    """
+    # The wandb run name is the filename without the ".txt" suffix — matches the pre-refactor behaviour.
+    run_id = os.path.splitext(log_filename)[0]
 
     # Set up local logging
     os.makedirs(cfg.local_log_dir, exist_ok=True)
-    local_log_filepath = os.path.join(cfg.local_log_dir, run_id + ".txt")
-    log_file = open(local_log_filepath, "w")
-    logger.info(f"Logging to local log file: {local_log_filepath}")
+    local_log_filepath = os.path.join(cfg.local_log_dir, log_filename)
+    log_file = open(local_log_filepath, log_mode)
+    logger.info(f"Logging to local log file ({'append' if log_mode == 'a' else 'write'}): {local_log_filepath}")
 
     # Initialize Weights & Biases logging if enabled
     if cfg.use_wandb:
@@ -1751,65 +1769,108 @@ def eval_libero(cfg: GenerateConfig) -> float:
     # Set random seed
     set_seed_everywhere(cfg.seed)
 
-    # Initialize model and components
-    model, action_head, proprio_projector, noisy_action_projector, processor = initialize_model(cfg)
-
-    # Get expected image dimensions
-    resize_size = get_image_resize_size(cfg)
-
-    # Setup logging
-    log_file, local_log_filepath, run_id = setup_logging(cfg)
-
     # Initialize the LIBERO-Plus task suite (re-uses the standard 4 suite names; each
-    # now holds ~2,400 perturbed variants).
+    # now holds ~2,400 perturbed variants). We do this BEFORE model init because
+    # `select_plus_tasks` is cheap and its length lets us short-circuit an already-complete
+    # (suite, category) run without paying the model-load cost.
     benchmark_dict = benchmark.get_benchmark_dict()
     task_suite = benchmark_dict[cfg.task_suite_name]()
 
     # Select the variants to evaluate: filter by perturbation category and sub-sample.
     # MUST match the transit run's --category / --eval_fraction / --seed so episode
-    # numbering lines up with the Stage-1 transit videos scanned for failures.
+    # numbering lines up with the Stage-1 transit videos scanned for failures — the same
+    # invariant is what makes the sidecar-progress-file resume safe.
     selected = select_plus_tasks(
         task_suite, cfg.task_suite_name, cfg.category, cfg.eval_fraction, cfg.seed
     )
+    num_selected = len(selected)
+
+    # Consult the progress sidecar to see if a partially-completed run exists for this
+    # exact (task_suite, category, eval_fraction, seed) combo. On resume this hands back
+    # the original log filename so the same EVAL-*.txt is appended to.
+    default_log_fn = _default_log_filename(cfg)
+    (start_index, total_episodes, total_successes, prior_category_stats,
+     log_filename, log_mode) = load_or_init_progress(cfg, default_log_fn)
+
+    # Setup logging (append mode on resume, write mode on fresh run)
+    log_file, local_log_filepath, run_id = setup_logging(cfg, log_filename, log_mode)
+
     log_message(
         f"Task suite: {cfg.task_suite_name} | category: {cfg.category} | "
-        f"eval_fraction: {cfg.eval_fraction}% | evaluating {len(selected)} / "
+        f"eval_fraction: {cfg.eval_fraction}% | evaluating {num_selected} / "
         f"{task_suite.n_tasks} variants",
         log_file,
     )
+    if log_mode == "a":
+        log_message(
+            f"===== RESUMING at task index {start_index}/{num_selected} "
+            f"(restored total_episodes={total_episodes}, total_successes={total_successes}) =====",
+            log_file,
+        )
 
-    # Initialize latency tracker
+    # Initialize latency tracker (restart from zero on resume — running averages aren't
+    # persisted, since they're diagnostic-only and would be misleading if reloaded)
     latency_tracker = LatencyTracker()
 
-    # Per-category accounting: category -> [episodes, successes]
+    # Rebuild per-category accounting as a defaultdict (autovivify for any category we
+    # haven't seen yet, e.g. when resuming into a new suite of `--category all`).
     category_stats = defaultdict(lambda: [0, 0])
+    for k, v in prior_category_stats.items():
+        category_stats[k] = list(v)
 
-    # Scan the Stage-1 transit videos ONCE for the set of failed episodes (the result is
-    # independent of task_id), then pass it into every run_task — vs. the LIBERO original,
-    # which rescans inside each run_task (~2,400 redundant os.walk scans at LIBERO-Plus scale).
-    rerun_dict = get_failed_episodes_from_videos(cfg, log_file)
-
-    # Start evaluation
-    total_episodes, total_successes = 0, 0
-    for task_id, category in tqdm.tqdm(selected):
-        total_episodes, total_successes = run_task(
-            cfg,
-            task_suite,
-            task_id,
-            category,
-            model,
-            resize_size,
-            processor,
-            action_head,
-            proprio_projector,
-            noisy_action_projector,
-            total_episodes,
-            total_successes,
-            category_stats,
-            rerun_dict,
+    if start_index >= num_selected:
+        # Nothing left to do — this (suite, category) run was already complete on disk.
+        # Fall through to the final-summary block so aggregate_plus_logs sees consistent
+        # totals in the appended log tail even for a no-op resume. Skip model load, the
+        # rerun_dict scan, and the main loop entirely.
+        log_message(
+            f"Nothing to do: {start_index}/{num_selected} tasks already complete on disk.",
             log_file,
-            latency_tracker,
         )
+    else:
+        # Only load the model when there's actual work — a repeated resume-into-a-complete-run
+        # otherwise wastes minutes on model init just to log "nothing to do".
+        model, action_head, proprio_projector, noisy_action_projector, processor = initialize_model(cfg)
+        resize_size = get_image_resize_size(cfg)
+
+        # Scan the Stage-1 transit videos ONCE for the set of failed episodes (the result is
+        # independent of task_id), then pass it into every run_task — vs. the LIBERO original,
+        # which rescans inside each run_task (~2,400 redundant os.walk scans at LIBERO-Plus scale).
+        # The scanned set covers ALL selected episodes (1..num_selected), so resuming at
+        # start_index just skips the prefix of the same iteration order — no re-scan needed.
+        rerun_dict = get_failed_episodes_from_videos(cfg, log_file)
+
+        # Main loop, resumed from `start_index`. `initial`+`total` give tqdm the correct
+        # global bar even though we only iterate the suffix of `selected`.
+        for i, (task_id, category) in enumerate(tqdm.tqdm(
+            selected[start_index:], initial=start_index, total=num_selected
+        )):
+            total_episodes, total_successes = run_task(
+                cfg,
+                task_suite,
+                task_id,
+                category,
+                model,
+                resize_size,
+                processor,
+                action_head,
+                proprio_projector,
+                noisy_action_projector,
+                total_episodes,
+                total_successes,
+                category_stats,
+                rerun_dict,
+                log_file,
+                latency_tracker,
+            )
+
+            # Persist progress after each completed task so a crash between iterations
+            # loses at most one task. `start_index + i + 1` is the count of completed
+            # items = position we'd resume from next time.
+            save_progress(
+                cfg, start_index + i + 1, num_selected,
+                total_episodes, total_successes, category_stats, log_filename,
+            )
 
     # Calculate final success rate
     final_success_rate = float(total_successes) / float(total_episodes) if total_episodes > 0 else 0
@@ -1841,7 +1902,8 @@ def eval_libero(cfg: GenerateConfig) -> float:
         )
         wandb.save(local_log_filepath)
 
-    # Log final latency analysis
+    # Log final latency analysis (only meaningful when episodes ran this invocation —
+    # otherwise reports zeros because `latency_tracker` was just constructed above.)
     latency_tracker.log_final_summary(log_file)
 
     # Close log file

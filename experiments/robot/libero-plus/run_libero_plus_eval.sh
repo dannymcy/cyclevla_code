@@ -66,24 +66,24 @@ for SUITE in "${SUITES[@]}"; do
   echo "LIBERO-Plus eval | suite=${SUITE} category=${CATEGORY} frac=${EVAL_FRACTION}% | GPU ${GPU}"
   echo "============================================================"
 
-  echo "[${SUITE}/${CATEGORY}] Stage 1 -- transit baseline"
-  CUDA_VISIBLE_DEVICES="${GPU}" python \
-    experiments/robot/libero-plus/run_libero_plus_eval_decomposed_progress_transit.py \
-    --pretrained_checkpoint "${CKPT}" \
-    --task_suite_name "${SUITE}" \
-    --category "${CATEGORY}" \
-    --eval_fraction "${EVAL_FRACTION}" \
-    --video_save_dir "${TRANSIT_DIR}"
-
-  # echo "[${SUITE}/${CATEGORY}] Stage 2 -- full method (transit/backtrack + MBR)"
+  # echo "[${SUITE}/${CATEGORY}] Stage 1 -- transit baseline"
   # CUDA_VISIBLE_DEVICES="${GPU}" python \
-  #   experiments/robot/libero-plus/run_libero_plus_eval_decomposed_progress_mbr.py \
+  #   experiments/robot/libero-plus/run_libero_plus_eval_decomposed_progress_transit.py \
   #   --pretrained_checkpoint "${CKPT}" \
   #   --task_suite_name "${SUITE}" \
   #   --category "${CATEGORY}" \
   #   --eval_fraction "${EVAL_FRACTION}" \
-  #   --video_save_dir "${MBR_DIR}" \
-  #   --video_base_dir "${TRANSIT_DIR}"
+  #   --video_save_dir "${TRANSIT_DIR}"
+
+  echo "[${SUITE}/${CATEGORY}] Stage 2 -- full method (transit/backtrack + MBR)"
+  CUDA_VISIBLE_DEVICES="${GPU}" python \
+    experiments/robot/libero-plus/run_libero_plus_eval_decomposed_progress_mbr.py \
+    --pretrained_checkpoint "${CKPT}" \
+    --task_suite_name "${SUITE}" \
+    --category "${CATEGORY}" \
+    --eval_fraction "${EVAL_FRACTION}" \
+    --video_save_dir "${MBR_DIR}" \
+    --video_base_dir "${TRANSIT_DIR}"
 
   echo "[${SUITE}/${CATEGORY}] done"
 done

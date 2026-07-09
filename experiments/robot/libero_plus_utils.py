@@ -471,3 +471,124 @@ def subsample_tasks(items, eval_fraction, seed):
         selected.extend(group[:keep])
 
     return sorted(selected, key=lambda x: x[0])
+
+
+# ---------------------------------------------------------------------------
+# Episode-level resume for interrupted eval runs
+#
+# A single sidecar JSON stored alongside the videos tracks how many items of
+# `select_plus_tasks(...)` have already been processed. On restart we reload the
+# counters and skip that prefix of the (deterministic) selected list. This is
+# safe *because* `subsample_tasks` is a pure function of (seed, eval_fraction,
+# category): the K-th item in the resumed list is exactly the K-th item the
+# crashed run was processing, so the `total_episodes` counter that encodes the
+# `--episode={N}--` field of each saved mp4 stays aligned across runs.
+#
+# The refuse-to-resume-on-mismatch behaviour is deliberate: silently discarding
+# a partial run of a different eval_fraction/seed would corrupt the numbering
+# for the failed-episode rerun mechanism in the mbr script.
+# ---------------------------------------------------------------------------
+
+
+PROGRESS_FILENAME = ".progress.json"
+
+
+def _progress_dir(video_save_dir, task_suite_name, category_str):
+    """Directory the progress file lives in — the same per-(suite, category) sub-dir the
+    videos already sit under, so the sidecar is co-located with the mp4s it's tracking.
+
+    For `--category all` runs (the shell launcher never uses this, but the Python API
+    supports it) we sit at `.../{suite}/all/` to keep a distinct namespace from any
+    single-category run's directory.
+    """
+    cat_norm = normalize_category(category_str)
+    cat_component = "all" if cat_norm == "all" else category_slug(cat_norm)
+    return os.path.join(video_save_dir, task_suite_name, cat_component)
+
+
+def _progress_file_path(video_save_dir, task_suite_name, category_str):
+    return os.path.join(
+        _progress_dir(video_save_dir, task_suite_name, category_str), PROGRESS_FILENAME
+    )
+
+
+def _config_key(cfg):
+    """The identity tuple that must match between a saved progress file and the current
+    cfg for a resume to be safe. Kept minimal: any of these differing changes the selected
+    list or the episode numbering."""
+    return {
+        "task_suite_name": cfg.task_suite_name,
+        "category": normalize_category(cfg.category),
+        "eval_fraction": int(cfg.eval_fraction),
+        "seed": int(cfg.seed),
+    }
+
+
+def load_or_init_progress(cfg, default_log_filename):
+    """Return the resume state for a (suite, category, eval_fraction, seed) run.
+
+    Reads `{video_save_dir}/{suite}/{category_slug}/.progress.json` if present. When the
+    file exists, its stored config key MUST match the current cfg — otherwise we raise
+    (rather than silently overwriting the user's partial work).
+
+    Returns a tuple (start_index, total_episodes, total_successes, category_stats,
+    log_filename, log_mode):
+      - `start_index` is where to resume the main `for _ in selected[start_index:]` loop.
+      - `total_episodes` / `total_successes` are the running counters carried into `run_task`.
+      - `category_stats` is a plain {category: [episodes, successes]} dict (callers wrap
+        it back into a defaultdict if they want autovivification for new categories).
+      - `log_filename` is the log basename to open — the original one when resuming (so
+        aggregate_plus_logs.py still sees a single EVAL-*.txt per (suite, category)) or
+        `default_log_filename` on a fresh run.
+      - `log_mode` is 'a' when resuming, 'w' otherwise.
+    """
+    path = _progress_file_path(cfg.video_save_dir, cfg.task_suite_name, cfg.category)
+    key = _config_key(cfg)
+
+    if not os.path.exists(path):
+        # Fresh run: seed the resume state without touching disk yet — save_progress()
+        # will atomically create the file after the first completed task.
+        return 0, 0, 0, {}, default_log_filename, "w"
+
+    with open(path, "r") as f:
+        state = json.load(f)
+
+    saved_key = {k: state.get(k) for k in key}
+    if saved_key != key:
+        raise ValueError(
+            f"Progress file at {path} was created with {saved_key}, current cfg is {key}; "
+            f"refusing to resume (this would misalign the episode numbering used by the "
+            f"failed-episode rerun mechanism). Delete the progress file to start fresh."
+        )
+
+    start_index = int(state.get("completed_count", 0))
+    total_episodes = int(state.get("total_episodes", start_index))
+    total_successes = int(state.get("total_successes", 0))
+    category_stats = {c: list(v) for c, v in state.get("category_stats", {}).items()}
+    log_filename = state.get("log_filename") or default_log_filename
+    return start_index, total_episodes, total_successes, category_stats, log_filename, "a"
+
+
+def save_progress(cfg, completed_count, num_selected, total_episodes, total_successes,
+                  category_stats, log_filename):
+    """Atomically rewrite the sidecar progress file after each completed task.
+
+    Uses write-to-tmp + `os.replace` so a crash mid-write cannot leave a truncated file
+    that would later fail to load. Callers pass `category_stats` as either a plain dict
+    or a defaultdict — both serialise the same.
+    """
+    path = _progress_file_path(cfg.video_save_dir, cfg.task_suite_name, cfg.category)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    payload = {
+        **_config_key(cfg),
+        "num_selected": int(num_selected),
+        "completed_count": int(completed_count),
+        "total_episodes": int(total_episodes),
+        "total_successes": int(total_successes),
+        "category_stats": {c: list(v) for c, v in category_stats.items()},
+        "log_filename": log_filename,
+    }
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(payload, f, indent=2)
+    os.replace(tmp, path)
