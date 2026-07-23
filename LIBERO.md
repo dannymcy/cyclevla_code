@@ -47,7 +47,7 @@ conda env config vars set LIBERO_CONFIG_PATH=$HOME/.libero-plus
 # On first import, LIBERO-Plus prompts to specify custom paths (dataset folder, etc.) —
 # answer N to all prompts to accept defaults; defaults already resolve under the LIBERO-plus clone.
 python -c "import libero.libero"
-cat $HOME/.libero-plus/config.yaml  # bddl_files / init_files / assets should resolve under /hdd2/kai/openvla-oft/LIBERO-plus/libero/libero/
+cat $HOME/.libero-plus/config.yaml  # bddl_files / init_files / assets should resolve under /hdd2/chenyang/openvla-oft/LIBERO-plus/libero/libero/
 ```
 
 Note: the default LIBERO-Plus eval protocol is `--num_trials_per_task 1` (vs. 50 in stock LIBERO) because each perturbation variant is already a separate BDDL — total ~1k–3k rollouts per suite instead of 10×50.
@@ -59,7 +59,7 @@ Note: the default LIBERO-Plus eval protocol is `--num_trials_per_task 1` (vs. 50
 **Option B:** regenerate from the original `modified_libero_rlds`. The pipeline runs in three stages. Adjust `--task-suite-id` (0=spatial, 1=object, 2=goal, 3=10) per suite, and run stage 1 and 2 four times to cover all four suites.
 
 ```bash
-conda activate /hdd2/kai/openvla-oft/env
+conda activate openvla-oft
 # Stage 1 — per-episode scene captions (Prismatic VLM by default)
 #   in:  modified_libero_rlds (original LIBERO RLDS)
 #   out: vlm_response/scene_description/libero/{task_suite}/results.json
@@ -75,5 +75,5 @@ CUDA_VISIBLE_DEVICES=0,1,2 python ecot_scripts/generate_embodied_data/decompose_
 #   in:  modified_libero_rlds + Stage-2 process_traj/.../chunks_summary.json
 #   out: decomposed_dataset/libero_sub_progress/libero_decomposed_progress/1.0.0/*.tfrecord-*
 cd rlds_dataset_builder/LIBERO_Decomposed_Progress
-CUDA_VISIBLE_DEVICES=-1 tfds build --data_dir=/hdd2/kai/openvla-oft/decomposed_dataset/libero_sub_progress --overwrite
+CUDA_VISIBLE_DEVICES=-1 tfds build --data_dir=/hdd2/chenyang/openvla-oft/decomposed_dataset/libero_sub_progress --overwrite
 ```

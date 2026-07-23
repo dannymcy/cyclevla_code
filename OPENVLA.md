@@ -27,9 +27,9 @@ Paper hyperparameters below — a single checkpoint covering all four LIBERO tas
 # out: checkpoints under --run_root_dir, as *_chkpt folders per --save_freq
 CUDA_VISIBLE_DEVICES="0,1,2,3" torchrun --standalone --nnodes 1 --nproc-per-node 4 vla-scripts/finetune_progress.py \
   --vla_path openvla/openvla-7b \
-  --data_root_dir "/hdd2/kai/openvla-oft/decomposed_dataset/libero_sub_progress/" \
+  --data_root_dir "/hdd2/chenyang/openvla-oft/decomposed_dataset/libero_sub_progress/" \
   --dataset_name libero_decomposed_progress \
-  --run_root_dir "/hdd2/kai/openvla-oft/checkpoints/libero/libero_sub_decomposed_progress_A100/" \
+  --run_root_dir "/hdd2/chenyang/openvla-oft/checkpoints/libero/libero_sub_decomposed_progress_A100/" \
   --use_l1_regression False \
   --use_diffusion True \
   --use_film False \
@@ -56,7 +56,7 @@ Point `--lora_adapter_dir` at one of the saved `*_chkpt` folders under `run_root
 ```bash
 python vla-scripts/merge_lora_weights_and_save.py \
   --base_vla_path openvla/openvla-7b \
-  --lora_adapter_dir /hdd2/kai/openvla-oft/checkpoints/libero/libero_sub_decomposed_progress_A100/openvla-7b+libero_decomposed_progress+b16+lr-0.0005+lora-r32+dropout-0.0--image_aug--parallel_dec--8_acts_chunk--continuous_acts--diffusion--3rd_person_img--wrist_img--proprio_state--500000_chkpt
+  --lora_adapter_dir /hdd2/chenyang/openvla-oft/checkpoints/libero/libero_sub_decomposed_progress_A100/openvla-7b+libero_decomposed_progress+b16+lr-0.0005+lora-r32+dropout-0.0--image_aug--parallel_dec--8_acts_chunk--continuous_acts--diffusion--3rd_person_img--wrist_img--proprio_state--500000_chkpt
 ```
 
 Note: merge on the **same GPU type used for inference** — a train-vs-test device mismatch (e.g. train H100, test A100) drops performance substantially. The adapter is re-mergeable any time; re-download the base model and merge again if needed.
@@ -70,7 +70,7 @@ All four task suites use the **same** unified checkpoint — only `--task_suite_
 Evaluation is a **two-stage workflow**: run the transit-only baseline first, then the full method, which re-runs **only the episodes the baseline failed** (it scans the baseline's rollout videos). Pass a shared `VIDEO_DIR` so the two scripts line up — their defaults do not match.
 
 ```bash
-CKPT=/hdd2/kai/openvla-oft/checkpoints/libero/libero_sub_decomposed_progress_A100/openvla-7b+libero_decomposed_progress+b16+lr-0.0005+lora-r32+dropout-0.0--image_aug--parallel_dec--8_acts_chunk--continuous_acts--diffusion--3rd_person_img--wrist_img--proprio_state--500000_chkpt
+CKPT=/hdd2/chenyang/openvla-oft/checkpoints/libero/libero_sub_decomposed_progress_A100/openvla-7b+libero_decomposed_progress+b16+lr-0.0005+lora-r32+dropout-0.0--image_aug--parallel_dec--8_acts_chunk--continuous_acts--diffusion--3rd_person_img--wrist_img--proprio_state--500000_chkpt
 VIDEO_DIR=./rollouts/rollouts_sub_decomposed_progress_transit_500000_chkpt
 
 for SUITE in libero_spatial libero_object libero_goal libero_10; do
@@ -124,7 +124,7 @@ Pipeline (2 steps): Step 1 produces per-seed rollouts, Step 2 aggregates them.
 # values (e.g. 200k/350k/500k steps) to study training duration.
 # out: trajectory_analysis_*.xlsx under
 #      rollouts/rollouts_sub_decomposed_progress_transit_seed_{ckpt}_chkpt/{task_suite}/
-CKPT=/hdd2/kai/openvla-oft/checkpoints/libero/libero_sub_decomposed_progress_A100/openvla-7b+libero_decomposed_progress+b16+lr-0.0005+lora-r32+dropout-0.0--image_aug--parallel_dec--8_acts_chunk--continuous_acts--diffusion--3rd_person_img--wrist_img--proprio_state--500000_chkpt
+CKPT=/hdd2/chenyang/openvla-oft/checkpoints/libero/libero_sub_decomposed_progress_A100/openvla-7b+libero_decomposed_progress+b16+lr-0.0005+lora-r32+dropout-0.0--image_aug--parallel_dec--8_acts_chunk--continuous_acts--diffusion--3rd_person_img--wrist_img--proprio_state--500000_chkpt
 
 for SUITE in libero_spatial libero_object libero_goal libero_10; do
   CUDA_VISIBLE_DEVICES="0" python experiments/robot/libero/run_libero_eval_decomposed_progress_transit_seed.py \
@@ -137,7 +137,7 @@ done
 # out: Random / MBR statistics matrices over N x distance metric.
 # --first_n K restricts analysis to the first K decision steps (e.g. --first_n 1 = step 0 only).
 python experiments/robot/libero/run_mbr_analysis.py \
-  --rollouts_dir /hdd2/kai/openvla-oft/rollouts
+  --rollouts_dir /hdd2/chenyang/openvla-oft/rollouts
 ```
 
 Notes:

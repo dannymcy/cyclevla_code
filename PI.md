@@ -26,17 +26,17 @@
 After the LIBERO 3-stage dataset pipeline finishes (see `LIBERO.md`):
 
 ```bash
-cd /hdd2/kai/openvla-oft/openpi
+cd /hdd2/chenyang/openvla-oft/openpi
 # in:  decomposed_dataset/libero_sub_progress/ (Stage-3 RLDS)
 # out: openpi/data/lerobot/cyclevla/libero_decomposed_progress/
 uv run examples/libero/convert_libero_data_to_lerobot_cyclevla.py \
-    --data_dir /hdd2/kai/openvla-oft/decomposed_dataset/libero_sub_progress
+    --data_dir /hdd2/chenyang/openvla-oft/decomposed_dataset/libero_sub_progress
 ```
 
 ## Step 2 — Compute Normalization Statistics
 
 ```bash
-cd /hdd2/kai/openvla-oft/openpi
+cd /hdd2/chenyang/openvla-oft/openpi
 # out: openpi/assets/pi05_libero_cyclevla/cyclevla/libero_decomposed_progress/norm_stats.json
 uv run scripts/compute_norm_stats.py --config-name pi05_libero_cyclevla
 ```
@@ -46,7 +46,7 @@ uv run scripts/compute_norm_stats.py --config-name pi05_libero_cyclevla
 Paper hyperparameters below — trained on a 4-GPU server.
 
 ```bash
-cd /hdd2/kai/openvla-oft/openpi
+cd /hdd2/chenyang/openvla-oft/openpi
 scripts/train_pi05_libero_cyclevla.sh \
     CycleVLA_libero_sub_decomposed_progress_pi05_A100 \
     --project-name cyclevla_openpi \
@@ -64,14 +64,14 @@ The pi0.5 policy is evaluated **client/server**: an openpi process serves the ch
 **One-time setup** — install the websocket client into the eval env:
 
 ```bash
-conda activate /hdd2/kai/openvla-oft/env
-pip install -e /hdd2/kai/openvla-oft/openpi/packages/openpi-client
+conda activate openvla-oft
+pip install -e /hdd2/chenyang/openvla-oft/openpi/packages/openpi-client
 ```
 
 **Step A — Serve the policy.** Edit `CKPT_DIR` in the helper (or export it) to point at your trained checkpoint (the dir must contain `params/` and `assets/`):
 
 ```bash
-cd /hdd2/kai/openvla-oft/openpi
+cd /hdd2/chenyang/openvla-oft/openpi
 CUDA_VISIBLE_DEVICES=0 scripts/serve_openpi_cyclevla.sh   # pi0.5 on GPU 0, ws://0.0.0.0:8000
 ```
 
@@ -82,8 +82,8 @@ CUDA_VISIBLE_DEVICES=0 scripts/serve_openpi_cyclevla.sh   # pi0.5 on GPU 0, ws:/
 This is a **two-stage** workflow (same as the OpenVLA-OFT `_mbr.py` eval): run the transit baseline **first**, then the full method, which re-runs **only the episodes the transit baseline failed** (it scans the baseline's rollout videos to find them). Run both stages for the same `--task_suite_name`.
 
 ```bash
-conda activate /hdd2/kai/openvla-oft/env
-cd /hdd2/kai/openvla-oft
+conda activate openvla-oft
+cd /hdd2/chenyang/openvla-oft
 
 # Stage 1 — transit-only baseline. Writes per-episode rollout videos to
 #   rollouts/rollouts_openpi_transit/  (raw subtask-transit success).
@@ -112,8 +112,8 @@ Each server is one pi0.5 model on one GPU on one port; each client connects by `
 **One suite, turnkey.** `eval_openpi_suite.sh <gpu_id> <port> <task_suite>` launches the server, runs transit + full method, and tears the server down:
 
 ```bash
-conda activate /hdd2/kai/openvla-oft/env
-cd /hdd2/kai/openvla-oft
+conda activate openvla-oft
+cd /hdd2/chenyang/openvla-oft
 bash experiments/robot/libero/eval_openpi_suite.sh 0 8000 libero_spatial
 ```
 
@@ -136,7 +136,7 @@ wait
 **One category, turnkey.** `eval_openpi_plus_category.sh <gpu_id> <port> <category> [eval_fraction]` launches the server, runs the two-stage eval across all 4 suites for that category, and tears the server down:
 
 ```bash
-conda activate /hdd2/chenyang/openvla-oft/env-plus
+conda activate openvla-oft-plus
 cd /hdd2/chenyang/openvla-oft
 experiments/robot/libero-plus/eval_openpi_plus_category.sh 2 8002 camera
 ```
