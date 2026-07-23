@@ -3,7 +3,7 @@
 # ./experiments/robot/libero/run_libero_eval_decomposed_progress_transit_seed.sh
 
 # Base checkpoint path (without the checkpoint number suffix)
-CHECKPOINT_BASE="/hdd2/kai/openvla-oft/checkpoints/libero/libero_sub_decomposed_progress_A100/openvla-7b+libero_decomposed_progress+b16+lr-0.0005+lora-r32+dropout-0.0--image_aug--parallel_dec--8_acts_chunk--continuous_acts--diffusion--3rd_person_img--wrist_img--proprio_state"
+CHECKPOINT_BASE="/hdd2/chenyang/openvla-oft/checkpoints/libero/libero_sub_decomposed_progress_A100/openvla-7b+libero_decomposed_progress+b16+lr-0.0005+lora-r32+dropout-0.0--image_aug--parallel_dec--8_acts_chunk--continuous_acts--diffusion--3rd_person_img--wrist_img--proprio_state"
 
 # Array of checkpoint numbers
 CHECKPOINT_NUMS=(500000)

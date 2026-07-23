@@ -151,7 +151,7 @@ def main():
              "default transit and mbr dirs under rollouts-plus/.",
     )
     parser.add_argument(
-        "--stage", type=str, default=None, choices=["transit", "mbr"],
+        "--stage", type=str, default=None, choices=["transit", "mbr", "cyclevla"],
         help="Label used in the aggregate file header (required with --log_dir).",
     )
     args = parser.parse_args()

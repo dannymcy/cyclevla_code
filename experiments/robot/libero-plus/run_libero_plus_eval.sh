@@ -31,11 +31,16 @@
 #
 # Prerequisites:
 #   conda activate openvla-oft-plus      # the LIBERO-Plus conda env (see LIBERO.md)
-#   conda activate /hdd2/kai/openvla-oft/env-plus
+#   conda activate /hdd2/chenyang/openvla-oft/env-plus
 #   OPENAI_API_KEY in the repo-root .env # used by the VLM detector + Language matcher
 #                                        # (loaded via python-dotenv; see SETUP.md)
 # =============================================================================
 set -euo pipefail
+
+# LIBERO-Plus and stock LIBERO share the same Python namespace but need
+# different bddl/init/asset paths.  Point at the Plus-specific config so both
+# envs can run simultaneously.
+export LIBERO_CONFIG_PATH="${HOME}/.libero-plus"
 
 GPU="${1:?usage: $0 <gpu_id> <task_suite|all> <category> [eval_fraction]}"
 SUITE_ARG="${2:?usage: $0 <gpu_id> <task_suite|all> <category> [eval_fraction]}"
@@ -48,7 +53,7 @@ cd "${REPO}"
 
 # Trained CycleVLA checkpoint (same checkpoint as the LIBERO eval). Override with
 # `CKPT=/path/to/other_chkpt experiments/robot/libero-plus/run_libero_plus_eval.sh ...`.
-CKPT="${CKPT:-/hdd2/kai/openvla-oft/checkpoints/libero/libero_sub_decomposed_progress_A100/openvla-7b+libero_decomposed_progress+b16+lr-0.0005+lora-r32+dropout-0.0--image_aug--parallel_dec--8_acts_chunk--continuous_acts--diffusion--3rd_person_img--wrist_img--proprio_state--500000_chkpt}"
+CKPT="${CKPT:-/hdd2/chenyang/openvla-oft/checkpoints/libero/libero_sub_decomposed_progress_A100/openvla-7b+libero_decomposed_progress+b16+lr-0.0005+lora-r32+dropout-0.0--image_aug--parallel_dec--8_acts_chunk--continuous_acts--diffusion--3rd_person_img--wrist_img--proprio_state--500000_chkpt}"
 
 # Stage-1 transit videos live here; Stage 2 scans this dir for failed episodes.
 TRANSIT_DIR="./rollouts-plus/rollouts_plus_decomposed_progress_transit"

@@ -1,33 +1,46 @@
 """
-run_libero_eval_openpi_transit.py
+run_libero_plus_eval_openpi_transit.py
 
-Baseline subtask-transit-only LIBERO eval for the **pi05 / openpi** CycleVLA
-policy.
+Baseline subtask-transit-only eval for the LIBERO-Plus robustness benchmark
+(openpi / pi0.5 backbone). LIBERO-Plus counterpart of
+`experiments/robot/libero/run_libero_eval_openpi_transit.py`.
 
-This is the openpi counterpart of `run_libero_eval_decomposed_progress_transit.py`:
-same transit-only protocol (no VLM, no backtrack, no MBR), but the 9-dim policy
-is served remotely by openpi instead of run in-process. Subtasks are advanced
-purely on the policy's stop signal.
+Stage 1 of the two-stage LIBERO-Plus workflow: it drives the same 9-dim policy
+as `..._openpi_cyclevla.py` but with no VLM, no backtrack, and no MBR —
+subtasks advance purely on the policy's stop signal (`stop > 0.5`) — and writes
+per-episode rollout videos that Stage 2 (`..._openpi_cyclevla.py`) scans to
+re-run only the episodes this baseline failed.
 
-Architecture differences vs. the OpenVLA-OFT script (all isolated in
-`experiments/robot/openpi_utils.py`):
+Architecture: the pi0.5 policy is served remotely by openpi over a websocket;
+all openpi-vs-OpenVLA convention differences are handled in
+`experiments/robot/openpi_utils.py`:
   - No local model: actions come from an openpi websocket policy server.
   - openpi emits the raw RLDS gripper and raw stop/progress floats, so there is
     no `process_action` / gripper inversion -- we threshold `stop > 0.5`.
 
-Usage (the eval env, with the policy server already running -- see
-`openpi/serve_openpi_cyclevla.sh`):
+LIBERO-Plus specifics (see experiments/robot/libero_plus_utils.py):
+  * The chosen `--task_suite_name` (libero_spatial/object/goal/10) now contains
+    ~2,400 perturbed task *variants* across 7 categories; `--category` restricts
+    the run to one category, `--eval_fraction` sub-samples it.
+  * `num_trials_per_task = 1` (the LIBERO-Plus paper protocol).
+  * The CycleVLA FSM is run on the *canonical* task instruction recovered per
+    task (filename-derived for the 6 non-Language categories; GPT-matched for
+    the Language category).
+  * Output goes under `rollouts-plus/`.
 
-  conda activate /hdd2/chenyang/openvla-oft/env
-  python experiments/robot/libero/run_libero_eval_openpi_transit.py \
-      --host 0.0.0.0 --port 8000 --task_suite_name libero_spatial
+Usage (with the policy server already running -- see
+`openpi/scripts/serve_openpi_cyclevla.sh`):
+
+  conda activate /hdd2/chenyang/openvla-oft/env-plus
+  CUDA_VISIBLE_DEVICES="0" python experiments/robot/libero-plus/run_libero_plus_eval_openpi_transit.py \
+      --host 0.0.0.0 --port 8000 --task_suite_name libero_spatial --category camera
 """
 
 import json
 import logging
 import os
 import sys
-from collections import deque
+from collections import deque, defaultdict
 from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
@@ -39,7 +52,6 @@ from libero.libero import benchmark
 
 import wandb
 
-# Append repo root so the interpreter can find `experiments.robot`.
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../"))
 sys.path.append(ROOT_DIR)
 
@@ -51,6 +63,21 @@ from experiments.robot.libero.libero_utils import (
 )
 from experiments.robot.openpi_utils import OpenPiClient, split_openpi_action
 from experiments.robot.robot_utils import DATE_TIME, set_seed_everywhere
+
+# LIBERO-Plus-specific helpers: perturbation-category lookup, canonical-task recovery
+# (incl. the Language-category GPT matcher), variant sub-sampling, and the sidecar
+# progress-file helpers that let an interrupted run resume where it left off.
+from experiments.robot.libero_plus_utils import (
+    PLUS_CATEGORY_COUNTS,
+    category_slug,
+    env_render_resolution,
+    load_or_init_progress,
+    normalize_category,
+    resolve_canonical_task,
+    rollout_label,
+    save_progress,
+    select_plus_tasks,
+)
 
 from fsm_utils.build import *
 from fsm_utils.utils import *
@@ -129,20 +156,26 @@ class GenerateConfig:
     num_open_loop_steps: int = 5
 
     #################################################################################################################
-    # LIBERO environment-specific parameters
+    # LIBERO-Plus environment-specific parameters
     #################################################################################################################
-    task_suite_name: str = TaskSuite.LIBERO_SPATIAL  # Task suite
+    task_suite_name: str = TaskSuite.LIBERO_SPATIAL  # Underlying suite (libero_spatial/object/goal/10)
+    category: str = "all"                            # Perturbation category: all | camera | robot | language | light | background | noise | layout
+    eval_fraction: int = 100                         # Sub-sample %: 10..100 (step 10). 100 = full LIBERO-Plus protocol
     num_steps_wait: int = 10                         # Number of steps to wait for objects to stabilize in sim
-    num_trials_per_task: int = 10                    # Number of rollouts per task
+    num_trials_per_task: int = 1                     # LIBERO-Plus protocol: 1 deterministic rollout per variant
     initial_states_path: str = "DEFAULT"             # "DEFAULT", or path to initial states JSON file
-    env_img_res: int = 1024                          # Sim render res for rollout videos (policy input is 224 regardless)
+    env_img_res: int = 1024                          # Resolution for environment images (not policy input resolution)
 
     #################################################################################################################
     # Utils
     #################################################################################################################
     run_id_note: Optional[str] = None                # Extra note to add to end of run ID for logging
-    local_log_dir: str = "./experiments/logs/logs_openpi_transit"   # Local directory for eval logs
-    video_save_dir: str = "./rollouts/rollouts_openpi_transit"
+    local_log_dir: str = "./rollouts-plus/logs_plus_openpi_transit"   # Local directory for eval logs
+    video_save_dir: str = "./rollouts-plus/rollouts_plus_openpi_transit"
+    # Directory holding the per-suite Language-category instruction->canonical-task cache.
+    # Shared with the cyclevla script (same default) on purpose: the two stages reuse each
+    # other's GPT-match results and resolve every rewrite to the identical canonical task.
+    instruction_cache_dir: str = "./experiments/robot/libero-plus"
 
     use_wandb: bool = False                          # Whether to also log results in Weights & Biases
     wandb_entity: str = "your-wandb-entity"          # Name of WandB entity
@@ -159,18 +192,30 @@ def validate_config(cfg: GenerateConfig) -> None:
     # The openpi server (`pi05_libero_cyclevla`, action_horizon=10) returns a
     # 10-action chunk; we cannot execute more open-loop steps than that.
     assert 1 <= cfg.num_open_loop_steps <= 10, "num_open_loop_steps must be in [1, 10]"
+    normalize_category(cfg.category)
+    assert 10 <= cfg.eval_fraction <= 100 and cfg.eval_fraction % 10 == 0, \
+        f"eval_fraction must be an integer in 10..100 (step 10); got {cfg.eval_fraction}"
 
 
-def setup_logging(cfg: GenerateConfig):
-    """Set up logging to file and optionally to wandb."""
-    run_id = f"EVAL-{cfg.task_suite_name}-openpi-transit-{DATE_TIME}"
+def _default_log_filename(cfg: GenerateConfig) -> str:
+    """Build the EVAL-*.txt basename for a fresh run."""
+    run_id = (f"EVAL-{cfg.task_suite_name}-{category_slug(normalize_category(cfg.category)) if cfg.category != 'all' else 'all'}"
+              f"-frac{cfg.eval_fraction}-openpi-{DATE_TIME}")
     if cfg.run_id_note is not None:
         run_id += f"--{cfg.run_id_note}"
+    return run_id + ".txt"
 
+
+def setup_logging(cfg: GenerateConfig, log_filename: str, log_mode: str):
+    """Set up logging to file and optionally to wandb.
+
+    `log_mode` is "w" for fresh, "a" for resume.
+    """
+    run_id = os.path.splitext(log_filename)[0]
     os.makedirs(cfg.local_log_dir, exist_ok=True)
-    local_log_filepath = os.path.join(cfg.local_log_dir, run_id + ".txt")
-    log_file = open(local_log_filepath, "w")
-    logger.info(f"Logging to local log file: {local_log_filepath}")
+    local_log_filepath = os.path.join(cfg.local_log_dir, log_filename)
+    log_file = open(local_log_filepath, log_mode)
+    logger.info(f"Logging to local log file ({'append' if log_mode == 'a' else 'write'}): {local_log_filepath}")
 
     if cfg.use_wandb:
         wandb.init(entity=cfg.wandb_entity, project=cfg.wandb_project, name=run_id)
@@ -189,7 +234,6 @@ def log_message(message: str, log_file=None):
 def load_initial_states(cfg: GenerateConfig, task_suite, task_id: int, log_file=None):
     """Load initial states for the given task."""
     initial_states = task_suite.get_task_init_states(task_id)
-
     if cfg.initial_states_path != "DEFAULT":
         with open(cfg.initial_states_path, "r") as f:
             all_initial_states = json.load(f)
@@ -218,8 +262,6 @@ def run_episode(
 
     # Reset environment
     env.reset()
-
-    # Set initial state if provided
     if initial_state is not None:
         obs = env.set_init_state(initial_state)
     else:
@@ -237,7 +279,7 @@ def run_episode(
     try:
         for subtask_idx, current_state in enumerate(states):
             if success:
-                break  # Exit full task loop once done is True
+                break
 
             t = 0
             # Stop-signal robustness counters - reset for each subtask
@@ -278,11 +320,11 @@ def run_episode(
                 if done:
                     success = True
                     log_message(f"Finished subtask: {current_state} in {t} steps", log_file)
-                    break  # Exit subtask loop
+                    break
 
                 # Robust stop-signal detection. openpi emits a raw stop float
-                # (~1.0 = stop); the OpenVLA script's `== -1` test becomes
-                # `> 0.5` here. The confirmation logic is otherwise identical.
+                # (~1.0 = stop); the confirmation logic matches the OpenVLA
+                # script's pattern, but with `> 0.5` instead of `== -1`.
                 if stop_signal > 0.5:
                     consecutive_high_count += 1
 
@@ -294,9 +336,7 @@ def run_episode(
                             log_file,
                         )
 
-                    # Break conditions
                     if consecutive_high_count >= 2:
-                        # Consecutive STOP confirmations
                         log_message(
                             f"Finished subtask: {current_state} at step {t} "
                             f"({consecutive_high_count} consecutive stop signals, "
@@ -305,7 +345,6 @@ def run_episode(
                         )
                         break
                     elif first_high_seen and steps_since_last_high >= 2:
-                        # STOP recurs after at least 2 "low" steps
                         log_message(
                             f"Finished subtask: {current_state} at step {t} "
                             f"(stop re-confirmed after {steps_since_last_high} low steps; "
@@ -320,10 +359,8 @@ def run_episode(
                                 f"(only {steps_since_last_high} low steps since last; need 2+).",
                                 log_file,
                             )
-                        # Reset the low-signal counter on a high
                         steps_since_last_high = 0
                 else:
-                    # Low (no stop), maintain robustness counters
                     consecutive_high_count = 0
                     if first_high_seen:
                         steps_since_last_high += 1
@@ -338,21 +375,45 @@ def run_task(
     cfg: GenerateConfig,
     task_suite,
     task_id: int,
+    category: str,
     client: OpenPiClient,
     total_episodes=0,
     total_successes=0,
+    category_stats=None,
     log_file=None,
 ):
-    """Run evaluation for a single task."""
+    """Run evaluation for a single LIBERO-Plus task variant.
+
+    `category` is the variant's perturbation category; `category_stats` is a
+    {category: [episodes, successes]} dict updated in place for per-category reporting.
+    """
     task = task_suite.get_task(task_id)
     initial_states, all_initial_states = load_initial_states(cfg, task_suite, task_id, log_file)
-    env, task_description = get_libero_env(task, "openpi", resolution=cfg.env_img_res)
+
+    # Initialize environment. The LIBERO-Plus env applies the perturbation automatically
+    # from the task name. `task.language` is filename-derived/dirty for LIBERO-Plus, so we
+    # discard it and recover the canonical FSM-style instruction explicitly below.
+    # The Noise category must render at 256 (its corruptions are 256-bound); the other 6
+    # categories use cfg.env_img_res (default 1024).
+    env, _ = get_libero_env(
+        task, "openpi",
+        resolution=env_render_resolution(category, cfg.env_img_res),
+    )
+    task_description = resolve_canonical_task(
+        task.name, category, env, cfg.task_suite_name, cfg.instruction_cache_dir,
+        log_fn=lambda m: log_message(m, log_file),
+    )
+    # Label for the saved rollout video: the original rewritten instruction for the
+    # Language category (so each video shows its real input), else the canonical task.
+    video_label = rollout_label(category, env, task_description)
+
+    # Per-category output sub-directory, e.g. rollouts-plus/.../libero_spatial/Camera/
+    video_dir = os.path.join(cfg.video_save_dir, cfg.task_suite_name, category_slug(category))
 
     task_episodes, task_successes = 0, 0
     for episode_idx in tqdm.tqdm(range(cfg.num_trials_per_task)):
         log_message(f"\nTask: {task_description}", log_file)
 
-        # Handle initial state
         if cfg.initial_states_path == "DEFAULT":
             initial_state = initial_states[episode_idx]
         else:
@@ -365,31 +426,30 @@ def run_task(
 
         log_message(f"Starting episode {task_episodes + 1}...", log_file)
 
-        # Run episode
         success, replay_images, replay_subtasks = run_episode(
-            cfg, env, task_description, client, initial_state, log_file
+            cfg, env, task_description, client, initial_state, log_file,
         )
 
-        # Update counters
         task_episodes += 1
         total_episodes += 1
         if success:
             task_successes += 1
             total_successes += 1
 
-        # Save replay video
+        if category_stats is not None:
+            category_stats[category][0] += 1
+            if success:
+                category_stats[category][1] += 1
+
         save_rollout_video_decomposed(
-            replay_images, total_episodes, success=success, task_description=task_description,
-            video_save_dir=os.path.join(cfg.video_save_dir, cfg.task_suite_name), log_file=log_file,
-            subtasks=replay_subtasks,
+            replay_images, total_episodes, success=success, task_description=video_label,
+            video_save_dir=video_dir, log_file=log_file, subtasks=replay_subtasks
         )
 
-        # Log results
         log_message(f"Success: {success}", log_file)
         log_message(f"# episodes completed so far: {total_episodes}", log_file)
         log_message(f"# successes: {total_successes} ({total_successes / total_episodes * 100:.1f}%)", log_file)
 
-    # Log task results
     task_success_rate = float(task_successes) / float(task_episodes) if task_episodes > 0 else 0
     total_success_rate = float(total_successes) / float(total_episodes) if total_episodes > 0 else 0
 
@@ -409,41 +469,89 @@ def run_task(
 
 @draccus.wrap()
 def eval_libero(cfg: GenerateConfig) -> float:
-    """Main function to evaluate the openpi CycleVLA policy on LIBERO tasks."""
-    # Validate configuration
+    """Main function to evaluate the openpi CycleVLA policy on LIBERO-Plus tasks."""
     validate_config(cfg)
-
-    # Set random seed
     set_seed_everywhere(cfg.seed)
 
-    # Connect to the openpi policy server (blocks until the server is up)
-    client = OpenPiClient(host=cfg.host, port=cfg.port)
-
-    # Setup logging
-    log_file, local_log_filepath, run_id = setup_logging(cfg)
-
-    # Initialize LIBERO task suite
+    # Initialize the LIBERO-Plus task suite (re-uses the standard 4 suite names; each
+    # now holds ~2,400 perturbed variants). We do this BEFORE connecting to the server
+    # because `select_plus_tasks` is cheap and its length lets us short-circuit an
+    # already-complete (suite, category) run without paying the connection cost.
     benchmark_dict = benchmark.get_benchmark_dict()
     task_suite = benchmark_dict[cfg.task_suite_name]()
-    num_tasks = task_suite.n_tasks
 
-    log_message(f"Task suite: {cfg.task_suite_name}", log_file)
+    # Select the variants to evaluate: filter by perturbation category and sub-sample.
+    # The cyclevla script calls select_plus_tasks with the same args -> identical task order,
+    # which is what makes the sidecar-progress-file resume safe (see libero_plus_utils).
+    selected = select_plus_tasks(
+        task_suite, cfg.task_suite_name, cfg.category, cfg.eval_fraction, cfg.seed
+    )
+    num_selected = len(selected)
 
-    # Start evaluation
-    total_episodes, total_successes = 0, 0
-    for task_id in tqdm.tqdm(range(num_tasks)):
-        total_episodes, total_successes = run_task(
-            cfg, task_suite, task_id, client, total_episodes, total_successes, log_file
+    # Consult the progress sidecar to see if a partially-completed run exists for this
+    # exact (task_suite, category, eval_fraction, seed) combo.
+    default_log_fn = _default_log_filename(cfg)
+    (start_index, total_episodes, total_successes, prior_category_stats,
+     log_filename, log_mode) = load_or_init_progress(cfg, default_log_fn)
+
+    log_file, local_log_filepath, run_id = setup_logging(cfg, log_filename, log_mode)
+
+    log_message(
+        f"Task suite: {cfg.task_suite_name} | category: {cfg.category} | "
+        f"eval_fraction: {cfg.eval_fraction}% | evaluating {num_selected} / "
+        f"{task_suite.n_tasks} variants",
+        log_file,
+    )
+    if log_mode == "a":
+        log_message(
+            f"===== RESUMING at task index {start_index}/{num_selected} "
+            f"(restored total_episodes={total_episodes}, total_successes={total_successes}) =====",
+            log_file,
         )
 
-    # Calculate final success rate
+    category_stats = defaultdict(lambda: [0, 0])
+    for k, v in prior_category_stats.items():
+        category_stats[k] = list(v)
+
+    if start_index >= num_selected:
+        log_message(
+            f"Nothing to do: {start_index}/{num_selected} tasks already complete on disk.",
+            log_file,
+        )
+    else:
+        # Connect to the openpi policy server (blocks until the server is up)
+        client = OpenPiClient(host=cfg.host, port=cfg.port)
+
+        for i, (task_id, category) in enumerate(tqdm.tqdm(
+            selected[start_index:], initial=start_index, total=num_selected
+        )):
+            total_episodes, total_successes = run_task(
+                cfg, task_suite, task_id, category, client,
+                total_episodes, total_successes, category_stats, log_file,
+            )
+
+            save_progress(
+                cfg, start_index + i + 1, num_selected,
+                total_episodes, total_successes, category_stats, log_filename,
+            )
+
+    # Final results
     final_success_rate = float(total_successes) / float(total_episodes) if total_episodes > 0 else 0
 
-    # Log final results
     log_message("Final results:", log_file)
     log_message(f"Total episodes: {total_episodes}", log_file)
     log_message(f"Total successes: {total_successes}", log_file)
     log_message(f"Overall success rate: {final_success_rate:.4f} ({final_success_rate * 100:.1f}%)", log_file)
+
+    log_message("Per-category success rates:", log_file)
+    for category in sorted(category_stats):
+        episodes, successes = category_stats[category]
+        rate = successes / episodes if episodes > 0 else 0
+        full_total = PLUS_CATEGORY_COUNTS.get(cfg.task_suite_name, {}).get(category)
+        suffix = f"  [full suite: {full_total} variants]" if full_total else ""
+        log_message(
+            f"  {category}: {successes}/{episodes} ({rate * 100:.1f}%){suffix}", log_file
+        )
 
     if cfg.use_wandb:
         wandb.log({"success_rate/total": final_success_rate, "num_episodes/total": total_episodes})

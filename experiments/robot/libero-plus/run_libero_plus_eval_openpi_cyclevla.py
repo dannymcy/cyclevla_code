@@ -1,18 +1,25 @@
 """
-run_libero_eval_openpi_cyclevla.py
+run_libero_plus_eval_openpi_cyclevla.py
 
-Full-method CycleVLA LIBERO eval for the **pi05 / openpi** policy.
+Full CycleVLA evaluation pipeline for the LIBERO-Plus robustness benchmark
+(openpi / pi0.5 backbone). LIBERO-Plus counterpart of
+`experiments/robot/libero/run_libero_eval_openpi_cyclevla.py`.
 
-This is the openpi counterpart of `run_libero_eval_decomposed_progress_mbr.py`.
-It runs the full proactive self-correction loop:
+Stage 2 of the two-stage LIBERO-Plus workflow. Uses the 9-dim subtask-aware
+openpi policy to step through subtasks via the stop + progress signals. At ~90%
+progress per subtask, a VLM is queried with `type: transit | backtrack`; on
+`backtrack` the env is physically rewound to the start of the failing subtask,
+N chunks are sampled from the stochastic openpi server, and the best one is
+selected via Minimum Bayes Risk (MBR). Per-component latencies are tracked.
 
-  - Per-subtask two-phase protocol: drive the subtask until the policy reports
-    ~90% progress (`to_check`), query a VLM for a `transit | backtrack`
-    decision, then drive to completion on the stop signal (`to_complete`).
-  - On `backtrack`, physically rewind the sim to the start of the target
-    subtask, then retry using **MBR (Minimum Bayes Risk) decoding** as
-    test-time scaling: sample N candidate action chunks, rank them, and execute
-    the MBR-selected chunk (bounded by a per-subtask retry cap).
+As in the LIBERO eval, this re-runs ONLY the episodes the transit baseline
+(`..._openpi_transit.py`) failed -- it scans the baseline's rollout videos under
+`--video_base_dir`. Pass `--rerun_all True` to skip the baseline and evaluate
+every selected variant fresh.
+
+Architecture: the pi0.5 policy is served remotely by openpi over a websocket;
+all openpi-vs-OpenVLA convention differences are handled in
+`experiments/robot/openpi_utils.py`.
 
 How MBR sampling works here: the openpi server is stochastic per `infer()`
 call (`Policy.infer` splits its RNG each call), so N `client.get_action` calls
@@ -21,45 +28,39 @@ change needed. Unlike the OpenVLA MBR (which replays a chosen diffusion seed),
 we already hold every sampled chunk, so we cache and execute the winner
 directly.
 
-What is intentionally NOT included (per the current task scope): the seed-sweep
-harness (`run_libero_eval_decomposed_progress_transit_seed.py`) and the post-hoc
-`run_mbr_analysis.py` aggregator. MBR *decoding* (the retry mechanism) IS
-included -- it is the core of the full method.
+LIBERO-Plus specifics (see experiments/robot/libero_plus_utils.py):
+  * `--task_suite_name` (libero_spatial/object/goal/10) holds ~2,400 perturbed
+    variants across 7 categories; `--category` restricts the run to one,
+    `--eval_fraction` sub-samples it. The transit and cyclevla scripts MUST be
+    run with the same `--category` / `--eval_fraction` / `--seed` so episode
+    numbering lines up for the rerun mechanism.
+  * `num_trials_per_task = 1` (the LIBERO-Plus paper protocol).
+  * The CycleVLA FSM is run on the *canonical* task instruction recovered per
+    task (filename-derived for the 6 non-Language categories; GPT-matched for
+    the Language category).
+  * Output goes under `rollouts-plus/`.
 
-The VLM detector and the sim-rewind / trajectory-feature helpers are imported
-from `run_libero_eval_decomposed_progress_mbr.py` so the VLM prompt and the
-MuJoCo state-restore logic stay single-sourced with the OpenVLA-OFT eval.
+Usage (with the policy server already running):
 
-The 9-dim policy is served remotely by openpi (see
-`openpi/serve_openpi_cyclevla.sh`); all openpi-vs-OpenVLA convention
-differences are handled in `experiments/robot/openpi_utils.py`.
-
-Two-stage workflow (mirrors `run_libero_eval_decomposed_progress_mbr.py`): this
-full-method eval re-runs only the episodes the transit baseline failed, so the
-transit eval must be run FIRST. It scans the transit baseline's rollout videos
-(`--video_base_dir`, default == the transit script's `video_save_dir`) to find
-the failed episodes. Pass `--rerun_all True` to evaluate every episode fresh
-instead. If no baseline videos are found, the run aborts (no silent fake-100%).
-
-Usage (the eval env, with the policy server already running):
-
-  conda activate /hdd2/chenyang/openvla-oft/env
+  conda activate /hdd2/chenyang/openvla-oft/env-plus
   # 1) transit baseline first (writes rollout videos used to pick the failures)
-  python experiments/robot/libero/run_libero_eval_openpi_transit.py \
-      --host 0.0.0.0 --port 8000 --task_suite_name libero_spatial
+  python experiments/robot/libero-plus/run_libero_plus_eval_openpi_transit.py \
+      --host 0.0.0.0 --port 8000 --task_suite_name libero_spatial --category camera
   # 2) full method -- re-runs only the episodes the baseline failed
-  python experiments/robot/libero/run_libero_eval_openpi_cyclevla.py \
-      --host 0.0.0.0 --port 8000 --task_suite_name libero_spatial
+  python experiments/robot/libero-plus/run_libero_plus_eval_openpi_cyclevla.py \
+      --host 0.0.0.0 --port 8000 --task_suite_name libero_spatial --category camera
 """
 
 import json
+import re
+import time
 import logging
 import os
 import sys
-from collections import deque
-from dataclasses import dataclass
+from collections import deque, defaultdict
+from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Optional, Any, Dict, List
 
 import draccus
 import numpy as np
@@ -70,7 +71,6 @@ from scipy.spatial.transform import Rotation as R
 
 import wandb
 
-# Append repo root so the interpreter can find `experiments.robot`.
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../"))
 sys.path.append(ROOT_DIR)
 
@@ -94,14 +94,31 @@ from experiments.robot.libero.run_libero_eval_decomposed_progress_mbr import (
     backtrace_robot_states,
     complex_states,
     extract_trajectory_features,
-    get_failed_episodes_from_videos,
     pick_place_states,
     record_robot_state,
     restore_robot_only,
 )
 
+from experiments.robot.libero_plus_utils import (
+    PLUS_CATEGORY_COUNTS,
+    category_slug,
+    env_render_resolution,
+    load_or_init_progress,
+    normalize_category,
+    resolve_canonical_task,
+    rollout_label,
+    save_progress,
+    select_plus_tasks,
+)
 
-# Define task suite constants
+from dotenv import load_dotenv
+
+# Load environment variables from .env file (OPENAI_API_KEY for VLM detector)
+load_dotenv()
+
+
+# ---- Task suite constants (same as every other eval script) ----
+
 class TaskSuite(str, Enum):
     LIBERO_SPATIAL = "libero_spatial"
     LIBERO_OBJECT = "libero_object"
@@ -110,17 +127,17 @@ class TaskSuite(str, Enum):
     LIBERO_90 = "libero_90"
 
 
-# Define max steps for each task suite
 TASK_MAX_STEPS = {
-    TaskSuite.LIBERO_SPATIAL: 220,  # longest training demo has 193 steps
-    TaskSuite.LIBERO_OBJECT: 280,  # longest training demo has 254 steps
-    TaskSuite.LIBERO_GOAL: 300,  # longest training demo has 270 steps
-    TaskSuite.LIBERO_10: 520,  # longest training demo has 505 steps
-    TaskSuite.LIBERO_90: 400,  # longest training demo has 373 steps
+    TaskSuite.LIBERO_SPATIAL: 220,
+    TaskSuite.LIBERO_OBJECT: 280,
+    TaskSuite.LIBERO_GOAL: 300,
+    TaskSuite.LIBERO_10: 520,
+    TaskSuite.LIBERO_90: 400,
 }
 
 
-# Set up logging
+# ---- Logging ----
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -128,6 +145,159 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
+def log_message(message: str, log_file=None):
+    logger.info(message)
+    if log_file:
+        log_file.write(message + "\n")
+        log_file.flush()
+
+
+# ---- Latency tracking (copied from the Plus MBR script; cannot import due to
+#      the hyphen in the `libero-plus/` directory name) ----
+
+@dataclass
+class EpisodeLatency:
+    """Track latency for a single episode."""
+    vlm_detector: float = 0.0
+    action_inference: float = 0.0
+    sampling: float = 0.0
+    mbr_computation: float = 0.0
+    backtracking: float = 0.0
+
+    def add(self, component: str, latency: float):
+        current = getattr(self, component)
+        setattr(self, component, current + latency)
+
+
+@dataclass
+class LatencyTracker:
+    """Track latency across all episodes."""
+    episodes: List[EpisodeLatency] = field(default_factory=list)
+    current_episode: EpisodeLatency = field(default_factory=EpisodeLatency)
+
+    def add_to_current(self, component: str, latency: float):
+        self.current_episode.add(component, latency)
+
+    def finish_episode(self):
+        self.episodes.append(self.current_episode)
+        self.current_episode = EpisodeLatency()
+
+    def log_episode_summary(self, episode_num: int, log_file):
+        log_message(f"\n===== Episode {episode_num} Latency Breakdown =====", log_file)
+        log_message(f"  VLM detector: {self.current_episode.vlm_detector:.3f}s", log_file)
+        log_message(f"  Action inference: {self.current_episode.action_inference:.3f}s", log_file)
+        log_message(f"  Sampling: {self.current_episode.sampling:.3f}s", log_file)
+        log_message(f"  MBR computation: {self.current_episode.mbr_computation:.3f}s", log_file)
+        log_message(f"  Backtracking: {self.current_episode.backtracking:.3f}s", log_file)
+        total = (self.current_episode.vlm_detector + self.current_episode.action_inference +
+                self.current_episode.sampling + self.current_episode.mbr_computation +
+                self.current_episode.backtracking)
+        log_message(f"  TOTAL THIS EPISODE: {total:.3f}s", log_file)
+
+        if self.episodes:
+            log_message(f"\n  Running averages across {len(self.episodes)} completed episodes:", log_file)
+            components = ['vlm_detector', 'action_inference', 'sampling', 'mbr_computation', 'backtracking']
+            for comp in components:
+                total = sum(getattr(ep, comp) for ep in self.episodes)
+                avg = total / len(self.episodes) if self.episodes else 0
+                log_message(f"    {comp}: {avg:.3f}s/episode", log_file)
+
+    def log_final_summary(self, log_file):
+        log_message("\n" + "="*80, log_file)
+        log_message("FINAL LATENCY ANALYSIS (AVERAGED ACROSS EPISODES)", log_file)
+        log_message("="*80, log_file)
+
+        if not self.episodes:
+            log_message("No episodes completed.", log_file)
+            return
+
+        components = ['vlm_detector', 'action_inference', 'sampling', 'mbr_computation', 'backtracking']
+
+        log_message(f"Total episodes analyzed: {len(self.episodes)}", log_file)
+        log_message("\nAverage latency PER EPISODE (only counting episodes where component was used):", log_file)
+
+        grand_total = 0
+        for comp in components:
+            ep_values = [getattr(ep, comp) for ep in self.episodes]
+            non_zero_values = [v for v in ep_values if v > 0]
+            num_used = len(non_zero_values)
+
+            if num_used > 0:
+                total = sum(non_zero_values)
+                avg = total / num_used
+                min_val = min(non_zero_values)
+                max_val = max(non_zero_values)
+
+                log_message(f"\n{comp.upper().replace('_', ' ')}:", log_file)
+                log_message(f"  Used in {num_used}/{len(self.episodes)} episodes", log_file)
+                log_message(f"  Average (when used): {avg:.3f}s", log_file)
+                log_message(f"  Min: {min_val:.3f}s", log_file)
+                log_message(f"  Max: {max_val:.3f}s", log_file)
+                log_message(f"  Total across all episodes: {total:.3f}s", log_file)
+                grand_total += total
+            else:
+                log_message(f"\n{comp.upper().replace('_', ' ')}:", log_file)
+                log_message(f"  Not used in any episode", log_file)
+
+        log_message(f"\nTOTAL time across all episodes: {grand_total:.3f}s", log_file)
+        log_message(f"Average total time per episode: {grand_total / len(self.episodes):.3f}s", log_file)
+        log_message("="*80 + "\n", log_file)
+
+
+# ---- Failed-episode scanner (LIBERO-Plus version: scans per-category sub-dirs) ----
+
+def get_failed_episodes_from_videos(cfg, log_file=None):
+    """Parse the Stage-1 transit video directory to find FAILED episodes.
+    Returns a dictionary in the format: {task_suite_name: [list of failed episode numbers]}
+
+    LIBERO-Plus: episode numbers are a running counter over the *selected*
+    task list, so they are only consistent between the transit and cyclevla runs
+    when both use the same `--category`. When a single category is being evaluated
+    we scan only that category's sub-directory; for `--category all` we scan the
+    whole suite directory.
+    """
+    video_dir = os.path.join(cfg.video_base_dir, cfg.task_suite_name)
+    if cfg.category != "all":
+        video_dir = os.path.join(video_dir, category_slug(normalize_category(cfg.category)))
+
+    if not os.path.exists(video_dir):
+        log_message(f"Video directory not found: {video_dir}", log_file)
+        return {cfg.task_suite_name: []}
+
+    failed_episodes = set()
+    all_episodes = set()
+    pattern = r"--episode=(\d+)--success=(True|False)--"
+
+    for root, dirs, files in os.walk(video_dir):
+        for file in files:
+            if file.endswith('.mp4'):
+                match = re.search(pattern, file)
+                if match:
+                    episode_num = int(match.group(1))
+                    success = match.group(2) == "True"
+                    all_episodes.add(episode_num)
+                    if not success:
+                        failed_episodes.add(episode_num)
+
+    episodes_list = sorted(list(failed_episodes))
+    rerun_dict = {cfg.task_suite_name: episodes_list}
+
+    log_message(f"\n{'='*80}", log_file)
+    log_message(f"RERUN DICT FROM VIDEO ANALYSIS", log_file)
+    log_message(f"{'='*80}", log_file)
+    log_message(f"Video directory: {video_dir}", log_file)
+    log_message(f"Task suite: {cfg.task_suite_name}", log_file)
+    log_message(f"Total episodes found: {len(all_episodes)}", log_file)
+    log_message(f"Failed episodes to rerun: {episodes_list}", log_file)
+    log_message(f"Number of failed episodes: {len(episodes_list)}", log_file)
+    log_message(f"Constructed rerun_dict: {rerun_dict}", log_file)
+    log_message(f"{'='*80}\n", log_file)
+
+    return rerun_dict
+
+
+# ---- Config ----
 
 @dataclass
 class GenerateConfig:
@@ -151,8 +321,7 @@ class GenerateConfig:
     vlm_model: str = "gpt-5.5"                       # VLM used for the transit/backtrack decision
     vlm_temperature: float = 1.0                     # VLM sampling temperature
 
-    # MBR (Minimum Bayes Risk) decoding on backtrack -- the test-time-scaling
-    # retry mechanism. Mirrors the `mbr_config` dict in the OpenVLA MBR eval.
+    # MBR (Minimum Bayes Risk) decoding on backtrack
     mbr_num_seeds: int = 8                           # Candidate action chunks sampled per backtrack
     mbr_distance_metric: str = "l2"                  # l2 | l1 | cosine | correlation | chebyshev
     mbr_use_failed_repulsion: bool = False           # Repel candidates away from previously-failed trajectories
@@ -160,50 +329,45 @@ class GenerateConfig:
     mbr_vanilla: bool = False                        # Use plain average-distance MBR (no r-NN density)
 
     #################################################################################################################
-    # LIBERO environment-specific parameters
+    # LIBERO-Plus environment-specific parameters
     #################################################################################################################
-    task_suite_name: str = TaskSuite.LIBERO_SPATIAL  # Task suite
+    task_suite_name: str = TaskSuite.LIBERO_SPATIAL  # Underlying suite (libero_spatial/object/goal/10)
+    category: str = "all"                            # Perturbation category: all | camera | robot | language | light | background | noise | layout
+    eval_fraction: int = 100                         # Sub-sample %: 10..100 (step 10). 100 = full LIBERO-Plus protocol
     num_steps_wait: int = 10                         # Number of steps to wait for objects to stabilize in sim
-    num_trials_per_task: int = 10                    # Number of rollouts per task
+    num_trials_per_task: int = 1                     # LIBERO-Plus protocol: 1 deterministic rollout per variant
     initial_states_path: str = "DEFAULT"             # "DEFAULT", or path to initial states JSON file
-    env_img_res: int = 1024                          # Sim render res for rollout videos (policy input is 224 regardless)
+    env_img_res: int = 1024                          # Resolution for environment images (not policy input resolution)
 
     #################################################################################################################
     # Utils
     #################################################################################################################
     run_id_note: Optional[str] = None                # Extra note to add to end of run ID for logging
-    local_log_dir: str = "./experiments/logs/logs_openpi_cyclevla"   # Local directory for eval logs
-    video_save_dir: str = "./rollouts/rollouts_openpi_cyclevla"
-
-    # Two-stage workflow (mirrors run_libero_eval_decomposed_progress_mbr.py):
-    # the full method re-runs only the episodes the transit baseline failed.
-    # `video_base_dir` must point at the transit eval's `video_save_dir` (they
-    # match by default). `rerun_all=True` runs every episode fresh instead.
-    video_base_dir: str = "./rollouts/rollouts_openpi_transit"
-    rerun_all: bool = False
+    local_log_dir: str = "./rollouts-plus/logs_plus_openpi_cyclevla"   # Local directory for eval logs
+    video_save_dir: str = "./rollouts-plus/rollouts_plus_openpi_cyclevla"
+    video_base_dir: str = "./rollouts-plus/rollouts_plus_openpi_transit"  # Stage-1 transit videos to scan for failures
+    # Directory holding the per-suite Language-category instruction->canonical-task cache.
+    instruction_cache_dir: str = "./experiments/robot/libero-plus"
 
     use_wandb: bool = False                          # Whether to also log results in Weights & Biases
-    wandb_entity: str = "your-wandb-entity"          # Name of WandB entity
-    wandb_project: str = "your-wandb-project"        # Name of WandB project
+    wandb_entity: str = "your-wandb-entity"
+    wandb_project: str = "your-wandb-project"
 
     seed: int = 0                                    # Random Seed (for reproducibility)
+    rerun_all: bool = False                          # Run all episodes fresh (skip the two-stage rerun mechanism)
 
     # fmt: on
 
 
 def validate_config(cfg: GenerateConfig) -> None:
-    """Validate configuration parameters."""
     assert cfg.task_suite_name in [suite.value for suite in TaskSuite], f"Invalid task suite: {cfg.task_suite_name}"
-    # The openpi server (`pi05_libero_cyclevla`, action_horizon=10) returns a
-    # 10-action chunk; we cannot execute more open-loop steps than that.
     assert 1 <= cfg.num_open_loop_steps <= 10, "num_open_loop_steps must be in [1, 10]"
     assert "OPENAI_API_KEY" in os.environ, "OPENAI_API_KEY must be set (in .env) for the VLM detector."
+    normalize_category(cfg.category)
+    assert 10 <= cfg.eval_fraction <= 100 and cfg.eval_fraction % 10 == 0, \
+        f"eval_fraction must be an integer in 10..100 (step 10); got {cfg.eval_fraction}"
 
-    # Two-stage guard. The full method re-runs only the episodes the transit
-    # baseline failed (read from `video_base_dir`). If that dir has no rollout
-    # videos, `get_failed_episodes_from_videos` would yield an empty failed-list
-    # -> every episode silently marked success without running. Fail loudly so
-    # this can never produce a fake ~100%.
+    # Two-stage guard: transit baseline videos must exist (unless --rerun_all).
     if not cfg.rerun_all:
         base = os.path.join(cfg.video_base_dir, cfg.task_suite_name)
         has_videos = os.path.isdir(base) and any(
@@ -214,43 +378,36 @@ def validate_config(cfg: GenerateConfig) -> None:
                 f"No transit-baseline rollout videos found at {base}.\n"
                 f"The full-method eval re-runs only the episodes the transit baseline failed, "
                 f"so run the transit eval for `{cfg.task_suite_name}` first:\n"
-                f"  python experiments/robot/libero/run_libero_eval_openpi_transit.py "
-                f"--task_suite_name {cfg.task_suite_name}\n"
+                f"  python experiments/robot/libero-plus/run_libero_plus_eval_openpi_transit.py "
+                f"--host {cfg.host} --port {cfg.port} --task_suite_name {cfg.task_suite_name} "
+                f"--category {cfg.category} --eval_fraction {cfg.eval_fraction}\n"
                 f"(keep its --video_save_dir equal to this script's --video_base_dir, "
                 f"currently '{cfg.video_base_dir}')\n"
                 f"-- or pass --rerun_all True to evaluate every episode fresh."
             )
 
 
-def setup_logging(cfg: GenerateConfig):
-    """Set up logging to file and optionally to wandb."""
-    run_id = f"EVAL-{cfg.task_suite_name}-openpi-cyclevla-{DATE_TIME}"
+def _default_log_filename(cfg: GenerateConfig) -> str:
+    run_id = (f"EVAL-{cfg.task_suite_name}-{category_slug(normalize_category(cfg.category)) if cfg.category != 'all' else 'all'}"
+              f"-frac{cfg.eval_fraction}-openpi-cyclevla-{DATE_TIME}")
     if cfg.run_id_note is not None:
         run_id += f"--{cfg.run_id_note}"
+    return run_id + ".txt"
 
+
+def setup_logging(cfg: GenerateConfig, log_filename: str, log_mode: str):
+    run_id = os.path.splitext(log_filename)[0]
     os.makedirs(cfg.local_log_dir, exist_ok=True)
-    local_log_filepath = os.path.join(cfg.local_log_dir, run_id + ".txt")
-    log_file = open(local_log_filepath, "w")
-    logger.info(f"Logging to local log file: {local_log_filepath}")
-
+    local_log_filepath = os.path.join(cfg.local_log_dir, log_filename)
+    log_file = open(local_log_filepath, log_mode)
+    logger.info(f"Logging to local log file ({'append' if log_mode == 'a' else 'write'}): {local_log_filepath}")
     if cfg.use_wandb:
         wandb.init(entity=cfg.wandb_entity, project=cfg.wandb_project, name=run_id)
-
     return log_file, local_log_filepath, run_id
 
 
-def log_message(message: str, log_file=None):
-    """Log a message to console and optionally to a log file."""
-    logger.info(message)
-    if log_file:
-        log_file.write(message + "\n")
-        log_file.flush()
-
-
 def load_initial_states(cfg: GenerateConfig, task_suite, task_id: int, log_file=None):
-    """Load initial states for the given task."""
     initial_states = task_suite.get_task_init_states(task_id)
-
     if cfg.initial_states_path != "DEFAULT":
         with open(cfg.initial_states_path, "r") as f:
             all_initial_states = json.load(f)
@@ -261,6 +418,8 @@ def load_initial_states(cfg: GenerateConfig, task_suite, task_id: int, log_file=
         return initial_states, None
 
 
+# ---- MBR chunk sampling (openpi version: stochastic server, no seed control) ----
+
 def sample_and_rank_chunks_mbr(
     cfg: GenerateConfig,
     client: OpenPiClient,
@@ -269,45 +428,30 @@ def sample_and_rank_chunks_mbr(
     failed_trajectories: list,
     selection_mode: str = "rep",
     log_file=None,
+    latency_tracker=None,
 ):
     """Sample N candidate action chunks from the openpi server and MBR-rank them.
 
-    openpi counterpart of `sample_and_rank_seeds_mbr` in the OpenVLA MBR eval.
-    Call this AFTER a backtrack, so `obs` is the sim observation at the start of
-    the subtask being retried.
-
-    The openpi server is stochastic per `infer()` call, so N `client.get_action`
-    calls on the same `obs` yield N diverse candidate chunks -- no seed control
-    needed. Because we hold every sampled chunk, we return the chunks themselves
-    (best-first) instead of seeds; the caller executes the winner directly.
-
-    Args:
-        failed_trajectories: first-N trajectory feature vectors from prior failed
-            runs of this subtask (used only when `cfg.mbr_use_failed_repulsion`).
-        selection_mode: "rep" (representative / densest pocket) or "away".
-
-    Returns:
-        list of action chunks (each a list of 9-dim np.ndarray), ranked best-first.
+    The openpi server is stochastic per `infer()` call, so N calls on the same
+    observation yield N diverse candidate chunks -- no seed control needed.
+    Returns the chunks themselves (best-first) instead of seeds.
     """
     num_seeds = cfg.mbr_num_seeds
     distance_metric = cfg.mbr_distance_metric
-    # multiply by 6: translation (xyz) + rotation (xyz) per timestep
     expected_features = cfg.num_open_loop_steps * 6
 
-    # Starting end-effector pose (same 8-dim state layout used for the policy).
     current_pos = np.asarray(obs["robot0_eef_pos"], dtype=np.float64)
     current_euler = np.asarray(quat2axisangle(obs["robot0_eef_quat"]), dtype=np.float64)
 
-    sampled_chunks = []              # raw 9-dim chunks (list of np.ndarray)
-    sampled_state_trajectories = []  # per-chunk feature vector for MBR
+    sampling_start = time.time()
+
+    sampled_chunks = []
+    sampled_state_trajectories = []
 
     for _ in range(num_seeds):
-        # One stochastic sample from the server (diverse across calls).
         chunk = client.get_action(obs, current_subtask, cfg.num_open_loop_steps)
         sampled_chunks.append(chunk)
 
-        # Integrate the action deltas into a predicted state trajectory, exactly
-        # as the OpenVLA MBR does (cumulative position; composed rotations).
         cumulative_pos = current_pos.copy()
         cumulative_rot = R.from_euler("xyz", current_euler)
         state_features: list = []
@@ -318,25 +462,26 @@ def sample_and_rank_chunks_mbr(
             state_features.extend(cumulative_pos.tolist())
             state_features.extend(cumulative_rot.as_euler("xyz").tolist())
 
-        # Pad short chunks to a fixed feature length.
         while len(state_features) < expected_features:
             state_features.extend([0, 0, 0, 0, 0, 0])
         sampled_state_trajectories.append(np.array(state_features[:expected_features]))
 
-    # ---- MBR ranking (ported from sample_and_rank_seeds_mbr) ----------------
-    X = np.stack(sampled_state_trajectories)  # (num_seeds, expected_features)
+    sampling_time = time.time() - sampling_start
+    if latency_tracker:
+        latency_tracker.add_to_current('sampling', sampling_time)
+
+    # ---- MBR ranking ----
+    mbr_start = time.time()
+
+    X = np.stack(sampled_state_trajectories)
     N = X.shape[0]
 
     metric_map = {
-        "l2": "euclidean",
-        "l1": "cityblock",
-        "cosine": "cosine",
-        "correlation": "correlation",
-        "chebyshev": "chebyshev",
+        "l2": "euclidean", "l1": "cityblock", "cosine": "cosine",
+        "correlation": "correlation", "chebyshev": "chebyshev",
     }
     dist_mat = cdist(X, X, metric=metric_map.get(distance_metric, "euclidean"))
 
-    # Vanilla MBR: rank by average distance to all other candidates.
     if cfg.mbr_vanilla:
         avg_dist = dist_mat.mean(axis=1)
         ranked_indices = np.argsort(avg_dist)[::-1] if selection_mode == "away" else np.argsort(avg_dist)
@@ -345,17 +490,17 @@ def sample_and_rank_chunks_mbr(
             f"top avg-distances: {avg_dist[ranked_indices[:3]]}",
             log_file,
         )
+        mbr_time = time.time() - mbr_start
+        if latency_tracker:
+            latency_tracker.add_to_current('mbr_computation', mbr_time)
         return [sampled_chunks[i] for i in ranked_indices]
 
-    # Adaptive r-NN neighborhood size.
     r = cfg.mbr_r_neighborhood if cfg.mbr_r_neighborhood is not None else max(2, min(4, int(np.sqrt(N))))
     r_eff = min(r, max(1, N - 1))
 
-    # r-NN radius = distance to the r-th nearest neighbor; densest pocket center.
     rnn_radius = np.partition(dist_mat, r_eff, axis=1)[:, r_eff]
     center_idx = int(np.argmin(rnn_radius))
     cluster_idx = np.argsort(dist_mat[center_idx])[:r_eff]
-    # Medoid inside the pocket (most representative candidate).
     intra = dist_mat[np.ix_(cluster_idx, cluster_idx)]
     medoid_local = cluster_idx[int(np.argmin(intra.mean(axis=1)))]
     d_to_medoid = dist_mat[medoid_local]
@@ -370,7 +515,6 @@ def sample_and_rank_chunks_mbr(
         iqr = (np.percentile(v_clip, 75) - np.percentile(v_clip, 25)) + 1e-8
         return (v - med) / iqr
 
-    # Optional repulsion away from previously-failed trajectories.
     if cfg.mbr_use_failed_repulsion and failed_trajectories:
         valid_failed = [
             ft for ft in failed_trajectories
@@ -386,22 +530,29 @@ def sample_and_rank_chunks_mbr(
     rnn_norm = robust_norm(rnn_radius)
     dmed_norm = robust_norm(d_to_medoid)
     dfail_norm = robust_norm(d_fail)
-    repulse = 1.0 / (1.0 + np.exp(-dfail_norm))  # sigmoid-softened repulsion (tau=1)
+    repulse = 1.0 / (1.0 + np.exp(-dfail_norm))
     lambda_fail = 0.5
 
     if selection_mode == "away":
         final_scores = dmed_norm + lambda_fail * repulse
     else:
         final_scores = -rnn_norm + lambda_fail * repulse
-    ranked_indices = np.argsort(final_scores)[::-1]  # higher is better
+    ranked_indices = np.argsort(final_scores)[::-1]
 
     log_message(
         f"MBR ranking complete (mode={selection_mode}, metric={distance_metric}); "
         f"medoid candidate index {medoid_local}; top scores: {final_scores[ranked_indices[:3]]}",
         log_file,
     )
+
+    mbr_time = time.time() - mbr_start
+    if latency_tracker:
+        latency_tracker.add_to_current('mbr_computation', mbr_time)
+
     return [sampled_chunks[i] for i in ranked_indices]
 
+
+# ---- Episode runner (two-phase: to_check -> VLM -> to_complete) ----
 
 def run_episode(
     cfg: GenerateConfig,
@@ -410,11 +561,14 @@ def run_episode(
     client: OpenPiClient,
     initial_state=None,
     log_file=None,
+    latency_tracker=None,
 ):
     """Run a single episode with the proactive transit/backtrack loop."""
+    if latency_tracker is None:
+        latency_tracker = LatencyTracker()
+
     # Get subtasks. The bare lowercased subtask string is the prompt the openpi
-    # policy was trained with (`prompt_from_task=True`; the Stage-3 RLDS builder
-    # writes `chunk['subtask'].lower()` into `language_instruction`).
+    # policy was trained with.
     states = pick_place_states(task_description, f"{cfg.task_suite_name}_no_noops")
     states = complex_states(task_description, f"{cfg.task_suite_name}_no_noops") if states is None else states
     states = [state.lower() for state in states]
@@ -428,10 +582,8 @@ def run_episode(
     else:
         obs = env.get_observation()
 
-    # Open-loop action queue, refilled from the policy server when empty.
     action_queue = deque(maxlen=cfg.num_open_loop_steps)
 
-    # Setup
     t = 0
     replay_images, replay_wrist_images, replay_subtasks = [], [], []
     max_steps = TASK_MAX_STEPS[cfg.task_suite_name]
@@ -439,13 +591,12 @@ def run_episode(
     success = False
     current_state = states[0]
     subtask_hist, exe_type_hist = [current_state], ["init"]
-    robot_state_hist: List[Dict[str, Any]] = []  # full sim snapshots for backtracking
+    robot_state_hist: List[Dict[str, Any]] = []
 
-    # Per-subtask phase: "to_check" -> VLM decision -> "to_complete".
     subtask_phase = "to_check"
 
-    # Goal/long tasks use the same robust (consecutive/recurring) confirmation
-    # for the 90% progress signal that all suites use for the stop signal.
+    # Goal/long tasks use robust (consecutive/recurring) confirmation for the
+    # 90% progress signal.
     use_robust_progress_checking = cfg.task_suite_name in ["libero_goal", "libero_10"]
     if use_robust_progress_checking:
         first_progress_high_seen = False
@@ -460,10 +611,10 @@ def run_episode(
     steps_since_last_high = 0
 
     # Per-subtask backtrack/retry + MBR bookkeeping.
-    subtask_retry_count: Dict[str, int] = {}          # bounds the correction loop
-    subtask_chunk_rankings: Dict[str, list] = {}      # MBR-ranked candidate chunks per subtask
-    current_chunk_index: Dict[str, int] = {}          # which ranked chunk to use next
-    subtask_failed_trajectories: Dict[str, list] = {}  # failed-run features (for repulsion)
+    subtask_retry_count: Dict[str, int] = {}
+    subtask_chunk_rankings: Dict[str, list] = {}
+    current_chunk_index: Dict[str, int] = {}
+    subtask_failed_trajectories: Dict[str, list] = {}
 
     try:
         while t < max_steps * 1.5 + cfg.num_steps_wait:
@@ -482,18 +633,17 @@ def run_episode(
 
             # If action queue is empty, requery the openpi policy server
             if len(action_queue) == 0:
+                start_time = time.time()
                 actions = client.get_action(obs, current_state, cfg.num_open_loop_steps)
                 action_queue.extend(actions)
+                latency_tracker.add_to_current('action_inference', time.time() - start_time)
 
-            # Record full sim snapshot BEFORE executing the next action (used to
-            # rewind on backtrack).
+            # Record full sim snapshot BEFORE executing the next action
             robot_state_hist = record_robot_state(robot_state_hist, current_state, env, obs)
 
-            # Split the 9-dim openpi action: dims 0-6 env-ready (raw gripper),
-            # dims 7-8 raw stop/progress floats.
+            # Split the 9-dim openpi action
             robot_action, stop_signal, progress_signal = split_openpi_action(action_queue.popleft())
 
-            # Step environment with the 7-dim robot action only
             obs, reward, done, info = env.step(robot_action.tolist())
             t += 1
 
@@ -506,7 +656,6 @@ def run_episode(
             # PHASE 1: Check for 90% progress (VLM decision point)
             # =========================
             if subtask_phase == "to_check":
-                # Gripper subtasks are trivial; skip the VLM check for them.
                 is_gripper_subtask = (
                     "close the gripper to grasp" in current_state.lower()
                     or "open the gripper to release" in current_state.lower()
@@ -522,7 +671,6 @@ def run_episode(
                 vlm_check_needed = False
 
                 if use_robust_progress_checking:
-                    # Robust checking (Goal/Long tasks): consecutive or recurring high signals.
                     if progress_signal >= cfg.progress_threshold:
                         consecutive_progress_high_count += 1
                         if not first_progress_high_seen:
@@ -559,7 +707,6 @@ def run_episode(
                         if first_progress_high_seen:
                             steps_since_last_progress_high += 1
                 else:
-                    # Simple checking (Spatial/Object tasks): 2nd high signal triggers.
                     if progress_signal >= cfg.progress_threshold:
                         count_check_signals += 1
                         log_message(
@@ -570,7 +717,6 @@ def run_episode(
                             log_message(f"90% progress confirmed after {count_check_signals} high signals", log_file)
 
                 if vlm_check_needed:
-                    # Hold a few identical frames in the replay for VLM context (no physics step).
                     current_img = get_libero_image(obs)
                     current_wrist_img = get_libero_wrist_image(obs)
                     for _ in range(32):
@@ -578,20 +724,19 @@ def run_episode(
                         replay_wrist_images.append(current_wrist_img)
                         replay_subtasks.append(f"VLM_90%_check: {current_state}")
 
-                    # Query the VLM for a transit/backtrack decision.
+                    start_time = time.time()
                     res = vlm_detector.detect_subtask(
                         current_state, states, subtask_hist, task_description, current_img, current_wrist_img
                     )
                     detected_state, exe_type, reason = vlm_detector.extract_res(res)
+                    latency_tracker.add_to_current('vlm_detector', time.time() - start_time)
+
                     log_message(
                         f"VLM check at 90% for subtask `{current_state}` -> next: {detected_state}, "
                         f"type: {exe_type}, reason: {reason}",
                         log_file,
                     )
 
-                    # Guard: a backtrack target must be an exact subtask string.
-                    # If the VLM names something else, a sim rewind / index
-                    # lookup would fail, so fall back to continuing.
                     if exe_type == "backtrack" and detected_state not in states:
                         log_message(
                             f"VLM backtrack target `{detected_state}` not in subtask list; treating as transit.",
@@ -603,8 +748,6 @@ def run_episode(
                         subtask_retry_count[current_state] = subtask_retry_count.get(current_state, 0) + 1
                         retry_num = subtask_retry_count[current_state]
 
-                        # Bound the correction loop: after `max_subtask_retries`
-                        # backtracks, force the subtask to completion.
                         if retry_num >= cfg.max_subtask_retries:
                             log_message(
                                 f"Maximum retries ({cfg.max_subtask_retries}) reached for subtask "
@@ -623,20 +766,17 @@ def run_episode(
                             log_file,
                         )
 
-                        # Record the failed run's first-N trajectory features
-                        # under the FAILING subtask (feeds MBR failed-repulsion).
                         failed_feat = extract_trajectory_features(
                             robot_state_hist, current_state, start_idx=0, end_idx=cfg.num_open_loop_steps
                         )
                         subtask_failed_trajectories.setdefault(current_state, []).append(failed_feat)
 
-                        # Switch to the target subtask and physically rewind the
-                        # sim to its start.
                         current_state = detected_state
                         subtask_hist.append(current_state)
                         exe_type_hist.append(f"backtrack_90%_retry{retry_num}")
                         action_queue.clear()
 
+                        start_time = time.time()
                         reversed_snaps = backtrace_robot_states(robot_state_hist, current_state)
                         for snap in reversed_snaps:
                             restore_robot_only(env, snap)
@@ -644,11 +784,9 @@ def run_episode(
                             replay_images.append(get_libero_image(obs))
                             replay_wrist_images.append(get_libero_wrist_image(obs))
                             replay_subtasks.append(f"backtrack_from_90%_retry{retry_num}")
+                        latency_tracker.add_to_current('backtracking', time.time() - start_time)
 
-                        # MBR decoding: on the first backtrack to this subtask,
-                        # sample N candidate chunks from the (stochastic) openpi
-                        # server and rank them; on later backtracks reuse the
-                        # ranking by stepping to the next-best chunk.
+                        # MBR decoding: sample N chunks on first backtrack; reuse ranking later
                         if current_state not in subtask_chunk_rankings:
                             log_message(
                                 f"Sampling {cfg.mbr_num_seeds} candidate chunks for MBR decoding "
@@ -656,22 +794,17 @@ def run_episode(
                                 log_file,
                             )
                             subtask_chunk_rankings[current_state] = sample_and_rank_chunks_mbr(
-                                cfg,
-                                client,
-                                obs,
-                                current_state,
+                                cfg, client, obs, current_state,
                                 subtask_failed_trajectories.get(current_state, []),
                                 log_file=log_file,
+                                latency_tracker=latency_tracker,
                             )
                             current_chunk_index[current_state] = 0
                         else:
                             current_chunk_index[current_state] += 1
                             if current_chunk_index[current_state] >= len(subtask_chunk_rankings[current_state]):
-                                current_chunk_index[current_state] = 0  # wrap around
+                                current_chunk_index[current_state] = 0
 
-                        # Prime the action queue with the MBR-selected chunk so
-                        # the retry executes it directly (openpi cannot replay a
-                        # seed, but we already hold the ranked chunk).
                         chunk_idx = current_chunk_index[current_state]
                         action_queue.extend(subtask_chunk_rankings[current_state][chunk_idx])
                         log_message(
@@ -680,7 +813,7 @@ def run_episode(
                             log_file,
                         )
 
-                        # Reset phase tracking for the retry.
+                        # Reset phase tracking for the retry
                         subtask_phase = "to_check"
                         if use_robust_progress_checking:
                             first_progress_high_seen = False
@@ -692,7 +825,7 @@ def run_episode(
                         consecutive_high_count = 0
                         steps_since_last_high = 0
                     else:
-                        # transit: continue current subtask toward completion.
+                        # transit: continue current subtask toward completion
                         log_message(
                             f"VLM decided to continue with subtask `{current_state}` "
                             f"(detected: {detected_state}, type: {exe_type})",
@@ -715,8 +848,6 @@ def run_episode(
             elif subtask_phase == "to_complete":
                 subtask_completed = False
 
-                # openpi emits a raw stop float (~1.0 = stop); the OpenVLA
-                # script's `== -1` test becomes `> 0.5` here.
                 if stop_signal > 0.5:
                     consecutive_high_count += 1
                     if not first_high_seen:
@@ -782,7 +913,7 @@ def run_episode(
     except Exception as e:
         log_message(f"Episode error: {e}", log_file)
 
-    # Drain any remaining queued actions (best effort, mirrors the MBR script).
+    # Drain remaining queued actions (best effort)
     if not success and len(action_queue) > 0:
         log_message(f"Executing {len(action_queue)} remaining actions in queue...", log_file)
         while len(action_queue) > 0:
@@ -790,7 +921,7 @@ def run_episode(
                 robot_action, _, _ = split_openpi_action(action_queue.popleft())
                 obs, reward, done, info = env.step(robot_action.tolist())
             except ValueError:
-                break  # Environment already terminated
+                break
             if done:
                 success = True
                 log_message("Environment signaled done while executing remaining actions", log_file)
@@ -802,31 +933,40 @@ def run_episode(
     return success, replay_images, replay_wrist_images, replay_subtasks
 
 
+# ---- Task runner (LIBERO-Plus variant: per-category sub-dirs + rerun_dict) ----
+
 def run_task(
     cfg: GenerateConfig,
     task_suite,
     task_id: int,
+    category: str,
     client: OpenPiClient,
     total_episodes=0,
     total_successes=0,
+    category_stats=None,
+    rerun_dict=None,
     log_file=None,
+    latency_tracker=None,
 ):
-    """Run evaluation for a single task."""
+    """Run evaluation for a single LIBERO-Plus task variant."""
     task = task_suite.get_task(task_id)
     initial_states, all_initial_states = load_initial_states(cfg, task_suite, task_id, log_file)
-    env, task_description = get_libero_env(task, "openpi", resolution=cfg.env_img_res)
+
+    env, _ = get_libero_env(
+        task, "openpi",
+        resolution=env_render_resolution(category, cfg.env_img_res),
+    )
+    task_description = resolve_canonical_task(
+        task.name, category, env, cfg.task_suite_name, cfg.instruction_cache_dir,
+        log_fn=lambda m: log_message(m, log_file),
+    )
+    video_label = rollout_label(category, env, task_description)
+    video_dir = os.path.join(cfg.video_save_dir, cfg.task_suite_name, category_slug(category))
 
     task_episodes, task_successes = 0, 0
-
-    # Two-stage workflow: scan the transit baseline's rollout videos to find
-    # which episodes it failed. The full method re-runs only those (the guard
-    # in validate_config guarantees these videos exist unless --rerun_all).
-    rerun_dict = get_failed_episodes_from_videos(cfg, log_file)
-
     for episode_idx in tqdm.tqdm(range(cfg.num_trials_per_task)):
         log_message(f"\nTask: {task_description}", log_file)
 
-        # Handle initial state
         if cfg.initial_states_path == "DEFAULT":
             initial_state = initial_states[episode_idx]
         else:
@@ -837,47 +977,49 @@ def run_task(
                 continue
             initial_state = np.array(all_initial_states[initial_states_task_key][episode_key]["initial_state"])
 
-        # Only re-run episodes the transit baseline failed (unless --rerun_all).
-        # Episode numbering matches the transit script: the video filename uses
-        # the post-increment `total_episodes`, so we test `total_episodes + 1`.
-        rerun = cfg.rerun_all or (total_episodes + 1 in rerun_dict[cfg.task_suite_name])
+        log_message(f"Starting episode {task_episodes + 1}...", log_file)
+
+        if cfg.rerun_all:
+            rerun = True
+        else:
+            rerun = True if total_episodes + 1 in rerun_dict[cfg.task_suite_name] else False
 
         if rerun:
-            log_message(f"Starting episode {task_episodes + 1}...", log_file)
             success, replay_images, replay_wrist_images, replay_subtasks = run_episode(
-                cfg, env, task_description, client, initial_state, log_file
+                cfg, env, task_description, client, initial_state, log_file, latency_tracker,
             )
+
+            if latency_tracker:
+                latency_tracker.log_episode_summary(total_episodes, log_file)
+                latency_tracker.finish_episode()
         else:
-            # Transit baseline already succeeded here -- count as success, do not re-run.
-            log_message(f"Episode {task_episodes + 1} passed the transit baseline; skipping.", log_file)
             success = True
 
-        # Update counters
         task_episodes += 1
         total_episodes += 1
         if success:
             task_successes += 1
             total_successes += 1
 
-        # Save replay videos (front + wrist) only for episodes we actually ran.
+        if category_stats is not None:
+            category_stats[category][0] += 1
+            if success:
+                category_stats[category][1] += 1
+
         if rerun:
             save_rollout_video_decomposed(
-                replay_images, total_episodes, success=success, task_description=task_description,
-                video_save_dir=os.path.join(cfg.video_save_dir, cfg.task_suite_name), log_file=log_file,
-                subtasks=replay_subtasks,
+                replay_images, total_episodes, success=success, task_description=video_label,
+                video_save_dir=video_dir, log_file=log_file, subtasks=replay_subtasks
             )
             save_rollout_video_decomposed(
-                replay_wrist_images, total_episodes, success=success, task_description=task_description,
-                video_save_dir=os.path.join(cfg.video_save_dir, cfg.task_suite_name), log_file=log_file,
-                subtasks=replay_subtasks, wrist=True,
+                replay_wrist_images, total_episodes, success=success, task_description=video_label,
+                video_save_dir=video_dir, log_file=log_file, subtasks=replay_subtasks, wrist=True
             )
 
-        # Log results
         log_message(f"Success: {success}", log_file)
         log_message(f"# episodes completed so far: {total_episodes}", log_file)
         log_message(f"# successes: {total_successes} ({total_successes / total_episodes * 100:.1f}%)", log_file)
 
-    # Log task results
     task_success_rate = float(task_successes) / float(task_episodes) if task_episodes > 0 else 0
     total_success_rate = float(total_successes) / float(total_episodes) if total_episodes > 0 else 0
 
@@ -895,47 +1037,97 @@ def run_task(
     return total_episodes, total_successes
 
 
+# ---- Main ----
+
 @draccus.wrap()
 def eval_libero(cfg: GenerateConfig) -> float:
-    """Main function to evaluate the openpi CycleVLA policy on LIBERO tasks."""
-    # Validate configuration
+    """Main function to evaluate the openpi CycleVLA policy on LIBERO-Plus tasks."""
     validate_config(cfg)
-
-    # Set random seed
     set_seed_everywhere(cfg.seed)
 
-    # Connect to the openpi policy server (blocks until the server is up)
-    client = OpenPiClient(host=cfg.host, port=cfg.port)
-
-    # Setup logging
-    log_file, local_log_filepath, run_id = setup_logging(cfg)
-
-    # Initialize LIBERO task suite
     benchmark_dict = benchmark.get_benchmark_dict()
     task_suite = benchmark_dict[cfg.task_suite_name]()
-    num_tasks = task_suite.n_tasks
 
-    log_message(f"Task suite: {cfg.task_suite_name}", log_file)
+    # Select variants: filter by category and sub-sample. MUST match the transit
+    # run's args so episode numbering lines up for the rerun mechanism.
+    selected = select_plus_tasks(
+        task_suite, cfg.task_suite_name, cfg.category, cfg.eval_fraction, cfg.seed
+    )
+    num_selected = len(selected)
 
-    # Start evaluation
-    total_episodes, total_successes = 0, 0
-    for task_id in tqdm.tqdm(range(num_tasks)):
-        total_episodes, total_successes = run_task(
-            cfg, task_suite, task_id, client, total_episodes, total_successes, log_file
+    default_log_fn = _default_log_filename(cfg)
+    (start_index, total_episodes, total_successes, prior_category_stats,
+     log_filename, log_mode) = load_or_init_progress(cfg, default_log_fn)
+
+    log_file, local_log_filepath, run_id = setup_logging(cfg, log_filename, log_mode)
+
+    log_message(
+        f"Task suite: {cfg.task_suite_name} | category: {cfg.category} | "
+        f"eval_fraction: {cfg.eval_fraction}% | evaluating {num_selected} / "
+        f"{task_suite.n_tasks} variants",
+        log_file,
+    )
+    if log_mode == "a":
+        log_message(
+            f"===== RESUMING at task index {start_index}/{num_selected} "
+            f"(restored total_episodes={total_episodes}, total_successes={total_successes}) =====",
+            log_file,
         )
 
-    # Calculate final success rate
+    latency_tracker = LatencyTracker()
+
+    category_stats = defaultdict(lambda: [0, 0])
+    for k, v in prior_category_stats.items():
+        category_stats[k] = list(v)
+
+    if start_index >= num_selected:
+        log_message(
+            f"Nothing to do: {start_index}/{num_selected} tasks already complete on disk.",
+            log_file,
+        )
+    else:
+        client = OpenPiClient(host=cfg.host, port=cfg.port)
+
+        # Scan Stage-1 transit videos ONCE for the set of failed episodes
+        rerun_dict = get_failed_episodes_from_videos(cfg, log_file)
+
+        for i, (task_id, category) in enumerate(tqdm.tqdm(
+            selected[start_index:], initial=start_index, total=num_selected
+        )):
+            total_episodes, total_successes = run_task(
+                cfg, task_suite, task_id, category, client,
+                total_episodes, total_successes, category_stats,
+                rerun_dict, log_file, latency_tracker,
+            )
+
+            save_progress(
+                cfg, start_index + i + 1, num_selected,
+                total_episodes, total_successes, category_stats, log_filename,
+            )
+
+    # Final results
     final_success_rate = float(total_successes) / float(total_episodes) if total_episodes > 0 else 0
 
-    # Log final results
     log_message("Final results:", log_file)
     log_message(f"Total episodes: {total_episodes}", log_file)
     log_message(f"Total successes: {total_successes}", log_file)
     log_message(f"Overall success rate: {final_success_rate:.4f} ({final_success_rate * 100:.1f}%)", log_file)
 
+    log_message("Per-category success rates:", log_file)
+    for category in sorted(category_stats):
+        episodes, successes = category_stats[category]
+        rate = successes / episodes if episodes > 0 else 0
+        full_total = PLUS_CATEGORY_COUNTS.get(cfg.task_suite_name, {}).get(category)
+        suffix = f"  [full suite: {full_total} variants]" if full_total else ""
+        log_message(
+            f"  {category}: {successes}/{episodes} ({rate * 100:.1f}%){suffix}", log_file
+        )
+
     if cfg.use_wandb:
         wandb.log({"success_rate/total": final_success_rate, "num_episodes/total": total_episodes})
         wandb.save(local_log_filepath)
+
+    latency_tracker.log_final_summary(log_file)
 
     if log_file:
         log_file.close()

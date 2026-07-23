@@ -111,6 +111,7 @@ invocations on different GPUs — e.g. one category each — to cover all 7 cate
 Notes:
 * `--category` picks one of the 7 categories (or `all`); `--eval_fraction` (10..100, default 100) uniformly sub-samples variants within a category — valid because each variant is itself an independent perturbation draw; `100` is the paper's full protocol. Transit and mbr stages must share `--category` / `--eval_fraction` / `--seed`.
 * Other LIBERO-eval notes (`--center_crop True`, the transformers fork, `--rerun_all`) apply unchanged.
+* The crash-resume sidecar (`.progress.json`) lets interrupted runs pick up where they left off — just re-run the same command.
 
 ## MBR Analysis
 

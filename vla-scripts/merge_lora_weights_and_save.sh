@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# conda activate /hdd2/kai/openvla-oft/env
+# conda activate /hdd2/chenyang/openvla-oft/env
 # chmod +x vla-scripts/merge_lora_weights_and_save.sh
 # ./vla-scripts/merge_lora_weights_and_save.sh
 
@@ -12,7 +12,7 @@ BASE_CHECKPOINT="openvla/openvla-7b"
 
 # Common prefix of your checkpoint directories, i.e. everything
 # BEFORE the "--50000_chkpt" suffix
-CKPT_PREFIX="/hdd2/kai/openvla-oft/checkpoints/libero/libero_sub_decomposed_progress_A100/openvla-7b+libero_decomposed_progress+b16+lr-0.0005+lora-r32+dropout-0.0--image_aug--parallel_dec--8_acts_chunk--continuous_acts--diffusion--3rd_person_img--wrist_img--proprio_state"
+CKPT_PREFIX="/hdd2/chenyang/openvla-oft/checkpoints/libero/libero_sub_decomposed_progress_A100/openvla-7b+libero_decomposed_progress+b16+lr-0.0005+lora-r32+dropout-0.0--image_aug--parallel_dec--8_acts_chunk--continuous_acts--diffusion--3rd_person_img--wrist_img--proprio_state"
 
 # GPU id you want to use in CUDA_VISIBLE_DEVICES
 GPU_ID=0

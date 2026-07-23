@@ -358,7 +358,7 @@ reasonings_json_path = os.path.join(args.results_path, f"reasonings_{args.task_s
 
 
 # watch -n 1 nvidia-smi
-# conda activate /hdd2/kai/openvla-oft/env_2
+# conda activate /hdd2/chenyang/openvla-oft/env_2
 # CUDA_VISIBLE_DEVICES="0,1,2" python ecot_scripts/generate_embodied_data/full_reasonings.py  --id 0
 
 if __name__ == "__main__":

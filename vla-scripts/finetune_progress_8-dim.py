@@ -67,15 +67,15 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 
 # watch -n 1 nvidia-smi
-# conda activate /hdd2/kai/openvla-oft/env
+# conda activate /hdd2/chenyang/openvla-oft/env
 
 
 # TODO: For CPS server
 # CUDA_VISIBLE_DEVICES="0,1" torchrun --standalone --nnodes 1 --nproc-per-node 2 vla-scripts/finetune_stop.py \
 #   --vla_path moojink/openvla-7b-oft-finetuned-libero-spatial-object-goal-10 \
-#   --data_root_dir "/hdd2/kai/openvla-oft/decomposed_dataset/libero_sub_oversample/" \
+#   --data_root_dir "/hdd2/chenyang/openvla-oft/decomposed_dataset/libero_sub_oversample/" \
 #   --dataset_name libero_decomposed_oversample \
-#   --run_root_dir "/hdd2/kai/openvla-oft/checkpoints/libero/libero_sub_decomposed_stop_oversample_A10/" \
+#   --run_root_dir "/hdd2/chenyang/openvla-oft/checkpoints/libero/libero_sub_decomposed_stop_oversample_A10/" \
 #   --use_l1_regression True \
 #   --use_diffusion False \
 #   --use_film False \

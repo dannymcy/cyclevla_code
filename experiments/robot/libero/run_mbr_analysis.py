@@ -11,10 +11,10 @@ Usage:
     python run_mbr_analysis.py --first_n 3  # Only use first 3 timesteps (e.g., 0, 8, 16)
 
 Example:
-    python run_mbr_analysis.py --rollouts_dir /hdd2/kai/openvla-oft/rollouts
+    python run_mbr_analysis.py --rollouts_dir /hdd2/chenyang/openvla-oft/rollouts
 """
 
-# conda activate /hdd2/kai/openvla-oft/env
+# conda activate /hdd2/chenyang/openvla-oft/env
 # python experiments/robot/libero/run_mbr_analysis.py
 # python experiments/robot/libero/run_mbr_analysis.py --first_n 1
 
@@ -452,10 +452,10 @@ def save_all_results_to_xlsx(all_results: Dict[int, Dict], output_dir: str, firs
 def main():
     parser = argparse.ArgumentParser(description='MBR Analysis for LIBERO Task Suite')
     parser.add_argument('--rollouts_dir', type=str, 
-                        default='/hdd2/kai/openvla-oft/rollouts',
+                        default='/hdd2/chenyang/openvla-oft/rollouts',
                         help='Path to rollouts directory')
     parser.add_argument('--output_dir', type=str,
-                        default='/hdd2/kai/openvla-oft/experiments/logs/mbr_analysis_results',
+                        default='/hdd2/chenyang/openvla-oft/experiments/logs/mbr_analysis_results',
                         help='Path to output directory for xlsx file')
     parser.add_argument('--metric', type=str, choices=['Top-1_Prob', 'Top-3_Prob', 'both'],
                         default='Top-1_Prob',

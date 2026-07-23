@@ -10,7 +10,7 @@ no VLM, no MBR. Use this to reproduce the OpenVLA-OFT numbers and as the
 """
 
 # watch -n 1 nvidia-smi
-# conda activate /hdd2/kai/openvla-oft/env
+# conda activate /hdd2/chenyang/openvla-oft/env
 
 # CUDA_VISIBLE_DEVICES="2" python experiments/robot/libero/run_libero_eval.py   --pretrained_checkpoint moojink/openvla-7b-oft-finetuned-libero-spatial   --task_suite_name libero_spatial 
 # CUDA_VISIBLE_DEVICES="2" python experiments/robot/libero/run_libero_eval.py   --pretrained_checkpoint moojink/openvla-7b-oft-finetuned-libero-object    --task_suite_name libero_object 

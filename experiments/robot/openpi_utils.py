@@ -29,8 +29,8 @@ policy in three ways that must be reconciled here, *not* in the eval scripts:
    scripts therefore threshold them directly (`stop > 0.5`, `progress >= ...`).
 
 Requires the `openpi-client` package to be importable in the eval env:
-    conda activate /hdd2/kai/openvla-oft/env
-    pip install -e /hdd2/kai/openvla-oft/openpi/packages/openpi-client
+    conda activate /hdd2/chenyang/openvla-oft/env
+    pip install -e /hdd2/chenyang/openvla-oft/openpi/packages/openpi-client
 """
 
 import numpy as np

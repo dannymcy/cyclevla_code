@@ -16,6 +16,10 @@
 | `experiments/robot/libero/run_libero_eval_openpi_transit.py` | Transit-only eval (advance subtask on the stop signal); openpi counterpart of `run_libero_eval_decomposed_progress_transit.py`. |
 | `experiments/robot/libero/run_libero_eval_openpi_cyclevla.py` | Full-method eval (VLM `transit/backtrack` at ~90% progress + sim rewind + MBR on backtrack); openpi counterpart of `run_libero_eval_decomposed_progress_mbr.py`. |
 | `experiments/robot/libero/eval_openpi_suite.sh` | Turnkey one-suite runner: launches the policy server on a given GPU/port, runs the two-stage eval (transit then full method), and tears the server down. Run several in parallel for multi-GPU evaluation. |
+| `experiments/robot/libero_plus_utils.py` | LIBERO-Plus helpers: perturbation-category lookup, canonical-task recovery (incl. the Language-category GPT matcher), variant sub-sampling, and crash-resume progress tracking. |
+| `experiments/robot/libero-plus/run_libero_plus_eval_openpi_transit.py` | LIBERO-Plus transit-only baseline eval (Stage 1) for the pi0.5 backbone. |
+| `experiments/robot/libero-plus/run_libero_plus_eval_openpi_cyclevla.py` | LIBERO-Plus full-method eval (Stage 2) for the pi0.5 backbone — VLM transit/backtrack + MBR. |
+| `experiments/robot/libero-plus/eval_openpi_plus_category.sh` | Turnkey one-category runner: launches the server, runs Stage 1 + Stage 2 for all 4 suites on one perturbation category, then tears the server down. |
 
 ## Step 1 — Convert RLDS Dataset to LeRobot Format
 
@@ -124,3 +128,31 @@ wait
 ```
 
 **Manual equivalent.** The turnkey scripts just automate this: launch one server per GPU on its own port, then point each suite's two-stage client at the matching port — e.g. `CUDA_VISIBLE_DEVICES=1 PORT=8001 scripts/serve_openpi_cyclevla.sh` paired with `... run_libero_eval_openpi_transit.py --port 8001 --task_suite_name libero_object`.
+
+## Launching LIBERO-Plus Evaluations
+
+[LIBERO-Plus](https://github.com/sylvestf/LIBERO-plus) is a robustness benchmark — each of the 4 suites expands to ~2,400 perturbed task variants across 7 categories (Camera, Robot, Language, Light, Background, Noise, Layout; 10,030 total). It is a drop-in LIBERO fork run in the separate `env-plus` conda env (see [LIBERO.md](LIBERO.md)); we evaluate the **same checkpoint** as above. Same two-stage flow (transit → full method), `num_trials_per_task=1`, results reported **per category** under `rollouts-plus/`.
+
+**One category, turnkey.** `eval_openpi_plus_category.sh <gpu_id> <port> <category> [eval_fraction]` launches the server, runs the two-stage eval across all 4 suites for that category, and tears the server down:
+
+```bash
+conda activate /hdd2/chenyang/openvla-oft/env-plus
+cd /hdd2/chenyang/openvla-oft
+experiments/robot/libero-plus/eval_openpi_plus_category.sh 2 8002 camera
+```
+
+The script sets `XLA_PYTHON_CLIENT_PREALLOCATE=false` and `XLA_PYTHON_CLIENT_MEM_FRACTION=0.45` internally, so each pi0.5 server uses ~9GB VRAM. Run multiple invocations on different GPUs/ports — e.g. one category each — to cover all 7 categories in parallel:
+
+```bash
+experiments/robot/libero-plus/eval_openpi_plus_category.sh 0 8000 camera   &
+experiments/robot/libero-plus/eval_openpi_plus_category.sh 1 8001 robot    &
+experiments/robot/libero-plus/eval_openpi_plus_category.sh 2 8002 language &
+experiments/robot/libero-plus/eval_openpi_plus_category.sh 3 8003 light    &
+wait
+```
+
+Notes:
+* `--category` picks one of the 7 categories; `--eval_fraction` (10..100, default 100) uniformly sub-samples variants within a category. Transit and cyclevla stages must share `--category` / `--eval_fraction` / `--seed`.
+* The full-method script needs `OPENAI_API_KEY` (in `.env`) for the VLM detector and the Language-category instruction matcher.
+* Logs go to `rollouts-plus/logs_plus_openpi_transit/` and `rollouts-plus/logs_plus_openpi_cyclevla/`; rollout videos to `rollouts-plus/rollouts_plus_openpi_transit/` and `rollouts-plus/rollouts_plus_openpi_cyclevla/`, organized by `<suite>/<Category>/`.
+* The crash-resume sidecar (`.progress.json`) lets interrupted runs pick up where they left off — just re-run the same command.

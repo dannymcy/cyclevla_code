@@ -45,14 +45,14 @@ from vlm_utils.utils import *
 
 
 # watch -n 1 nvidia-smi
-# conda activate /hdd2/kai/openvla-oft/env
+# conda activate /hdd2/chenyang/openvla-oft/env
 # CUDA_VISIBLE_DEVICES="0" python ecot_scripts/generate_embodied_data/bounding_boxes/generate_descriptions.py --task-suite-id 0
 # CUDA_VISIBLE_DEVICES="0" python ecot_scripts/generate_embodied_data/bounding_boxes/generate_descriptions.py --dataset "bridge"
 
 parser = argparse.ArgumentParser()
 
 parser.add_argument("--gpu",  default=0, type=int)
-parser.add_argument("--save-path", default="/hdd2/kai/openvla-oft/vlm_response/scene_description")
+parser.add_argument("--save-path", default="/hdd2/chenyang/openvla-oft/vlm_response/scene_description")
 parser.add_argument("--dataset", default="libero")  # ["libero", "bridge"]
 parser.add_argument("--task-suite-id", default=0, type=int)  # [0, 1, 2, 3]
 parser.add_argument("--seed", default=0, type=int)
@@ -66,10 +66,10 @@ hf_token = os.environ['HUGGINGFACE_TOKEN']
 if args.dataset == "libero":
     task_suite_list = ["libero_spatial_no_noops", "libero_object_no_noops", "libero_goal_no_noops", "libero_10_no_noops"]
     task_suite = task_suite_list[args.task_suite_id]
-    data_dir = "/hdd2/kai/openvla-oft/LIBERO/libero/libero/modified_libero_rlds"
+    data_dir = "/hdd2/chenyang/openvla-oft/LIBERO/libero/libero/modified_libero_rlds"
 elif args.dataset == "bridge":
     task_suite = "bridge"
-    data_dir = "/hdd2/kai/openvla-oft"
+    data_dir = "/hdd2/chenyang/openvla-oft"
 results_path = os.path.join(args.save_path, args.dataset, task_suite)
 
 # Set random seed

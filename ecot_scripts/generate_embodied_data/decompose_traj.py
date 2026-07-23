@@ -265,7 +265,7 @@ def visualize_decomposed_rlds(original_rlds_dir, task_suite):
 parser = argparse.ArgumentParser()
 
 parser.add_argument("--gpu",  default=0, type=int)
-parser.add_argument("--save-path", default="/hdd2/kai/openvla-oft/vlm_response")
+parser.add_argument("--save-path", default="/hdd2/chenyang/openvla-oft/vlm_response")
 parser.add_argument("--dataset", default="libero")  # ["libero", "bridge"]
 parser.add_argument("--task-suite-id", default=0, type=int)  # [0, 1, 2, 3]
 parser.add_argument("--seed", default=0, type=int)
@@ -278,10 +278,10 @@ device = f"cuda:{args.gpu}"
 if args.dataset == "libero":
     task_suite_list = ["libero_spatial_no_noops", "libero_object_no_noops", "libero_goal_no_noops", "libero_10_no_noops"]
     task_suite = task_suite_list[args.task_suite_id]
-    data_dir = "/hdd2/kai/openvla-oft/LIBERO/libero/libero/modified_libero_rlds"
+    data_dir = "/hdd2/chenyang/openvla-oft/LIBERO/libero/libero/modified_libero_rlds"
 elif args.dataset == "bridge":
     task_suite = "bridge"
-    data_dir = "/hdd2/kai/openvla-oft"
+    data_dir = "/hdd2/chenyang/openvla-oft"
     
 # Set random seed
 set_seed_everywhere(args.seed)
@@ -290,7 +290,7 @@ warnings.filterwarnings("ignore")
 
 
 # watch -n 1 nvidia-smi
-# conda activate /hdd2/kai/openvla-oft/env_2
+# conda activate /hdd2/chenyang/openvla-oft/env_2
 # CUDA_VISIBLE_DEVICES="0,1,2" python ecot_scripts/generate_embodied_data/decompose_traj.py --task-suite-id 0 --vlm "gpt"
 # CUDA_VISIBLE_DEVICES="0,1,2" python ecot_scripts/generate_embodied_data/decompose_traj.py --dataset "bridge"
 
@@ -320,4 +320,4 @@ if __name__ == "__main__":
     process_trajectories(ds, decompose_path=decompose_path, results_path=process_path)
 
     # visualize_decomposed_rlds(data_dir, "libero_spatial_no_noops")
-    visualize_decomposed_rlds("/hdd2/kai/openvla-oft/decomposed_dataset/libero_sub_progress", "libero_decomposed_progress")
+    visualize_decomposed_rlds("/hdd2/chenyang/openvla-oft/decomposed_dataset/libero_sub_progress", "libero_decomposed_progress")
