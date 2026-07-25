@@ -81,6 +81,8 @@ CUDA_VISIBLE_DEVICES=0 scripts/serve_openpi_cyclevla.sh   # pi0.5 on GPU 0, ws:/
 
 This is a **two-stage** workflow (same as the OpenVLA-OFT `_mbr.py` eval): run the transit baseline **first**, then the full method, which re-runs **only the episodes the transit baseline failed** (it scans the baseline's rollout videos to find them). Run both stages for the same `--task_suite_name`.
 
+> **Important — paper vs. repo eval workflow:** In the paper, CycleVLA is the **main method** applied to every episode — it is NOT a post-hoc correction that only fixes failures. The two-stage workflow here is for the user's convenience: by running transit-only first, you can quickly see how CycleVLA detects and corrects the episodes that transit alone failed. To run the full method on every episode (matching the paper), pass `--rerun_all True` to Stage 2.
+
 ```bash
 conda activate openvla-oft
 cd /hdd2/chenyang/openvla-oft

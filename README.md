@@ -32,6 +32,10 @@ See [OPENVLA.md](OPENVLA.md) for finetuning/evaluating the OpenVLA-OFT backbone 
 
 See [PI.md](PI.md) for finetuning/evaluating the pi0.5 (openpi) backbone on the LIBERO and LIBERO-Plus simulation benchmark task suites.
 
+## Real-Robot Experiments
+
+If you also use the AgileX PiPER arm with a leader arm follower arm setup (more details in the paper), you can use our real robot code at https://github.com/dannymcy/cyclevla_distal/tree/main. The original codebase is from https://github.com/reeceomahoney/distal.
+
 ## Support
 
 If you run into any issues, please open a new GitHub issue.

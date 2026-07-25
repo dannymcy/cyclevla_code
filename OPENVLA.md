@@ -69,6 +69,8 @@ All four task suites use the **same** unified checkpoint — only `--task_suite_
 
 Evaluation is a **two-stage workflow**: run the transit-only baseline first, then the full method, which re-runs **only the episodes the baseline failed** (it scans the baseline's rollout videos). Pass a shared `VIDEO_DIR` so the two scripts line up — their defaults do not match.
 
+> **Important — paper vs. repo eval workflow:** In the paper, CycleVLA is the **main method** applied to every episode — it is NOT a post-hoc correction that only fixes failures. The two-stage workflow here is for the user's convenience: by running transit-only first, you can quickly see how CycleVLA detects and corrects the episodes that transit alone failed. To run the full method on every episode (matching the paper), pass `--rerun_all True` to Stage 2.
+
 ```bash
 CKPT=/hdd2/chenyang/openvla-oft/checkpoints/libero/libero_sub_decomposed_progress_A100/openvla-7b+libero_decomposed_progress+b16+lr-0.0005+lora-r32+dropout-0.0--image_aug--parallel_dec--8_acts_chunk--continuous_acts--diffusion--3rd_person_img--wrist_img--proprio_state--500000_chkpt
 VIDEO_DIR=./rollouts/rollouts_sub_decomposed_progress_transit_500000_chkpt
