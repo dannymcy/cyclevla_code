@@ -1,1 +1,2 @@
 rsync -avP teaser.png kai@cps3.cs.ox.ac.uk:/hdd2/kai/openvla-oft/assets/
+rsync -avP teaser.png chenyang@cps4.cs.ox.ac.uk:/hdd2/chenyang/openvla-oft/assets/
