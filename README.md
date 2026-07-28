@@ -45,7 +45,7 @@ If you run into any issues, please open a new GitHub issue.
 ```bibtex
 @article{ma2026cyclevla,
   title={CycleVLA: Proactive Self-Correcting Vision-Language-Action Models via Subtask Backtracking and Minimum Bayes Risk Decoding},
-  author={Ma, Chenyang and Yang, Guangyu and Lu, Kai and Xu, Shitong and Byrne, Bill and Trigoni, Niki and Markham, Andrew},
+  author={Ma, Chenyang and Lu, Kai and Yang, Guangyu and Liu, Jiuming and Xu, Shitong and Byrne, Bill and Havoutis, Ioannis and Trigoni, Niki and Markham, Andrew},
   journal={arXiv preprint arXiv:2601.02295},
   year={2026}
 }
