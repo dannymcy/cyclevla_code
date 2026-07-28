@@ -12,12 +12,12 @@ In this work, we introduce CycleVLA, a system that enables VLAs to anticipate in
 
 **Paper: https://arxiv.org/abs/2601.02295**
 
-**Summary video: https://www.youtube.com/watch?v=9wRYdksmS6s**
+**Summary video: https://www.youtube.com/watch?v=09W81JMbF1E**
 
 ## System Requirements
 
 Training:
-* 4 A100 GPUs with 40 GB VRAM
+* 4 or 8 A100 GPUs with 40 GB VRAM
 
 Inference:
 * 1 GPU with ~24 GB VRAM
