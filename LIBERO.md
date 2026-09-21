@@ -54,7 +54,7 @@ Note: the default LIBERO-Plus eval protocol is `--num_trials_per_task 1` (vs. 50
 
 ## Generate Subtask-Decomposed LIBERO Dataset
 
-**Option A (recommanded):** download our pre-generated dataset (coming soon) and extract it to `decomposed_dataset/libero_sub_progress/` at the repo root, so it matches the Stage-3 output path Option B would produce.
+**Option A (recommended):** download our pre-generated dataset from [Hugging Face](https://huggingface.co/datasets/dannymcy/libero_subtask_decomposed) and extract it to `decomposed_dataset/libero_sub_progress/` at the repo root, so it matches the Stage-3 output path Option B would produce.
 
 **Option B:** regenerate from the original `modified_libero_rlds`. The pipeline runs in three stages. Adjust `--task-suite-id` (0=spatial, 1=object, 2=goal, 3=10) per suite, and run stage 1 and 2 four times to cover all four suites.
 
