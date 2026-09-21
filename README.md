@@ -14,12 +14,6 @@ In this work, we introduce CycleVLA, a system that enables VLAs to anticipate in
 
 **Summary video: https://www.youtube.com/watch?v=09W81JMbF1E**
 
-## Dataset
-
-Our subtask-decomposed LIBERO dataset (RLDS format) is available on Hugging Face: [dannymcy/libero_subtask_decomposed](https://huggingface.co/datasets/dannymcy/libero_subtask_decomposed)
-
-The dataset contains 6,501 subtask sub-episodes (266,207 transitions) across all four LIBERO suites with 9-dim action supervision including stop signals and subtask progress labels. See [LIBERO.md](LIBERO.md) for details on dataset generation.
-
 ## System Requirements
 
 Training:
@@ -31,6 +25,12 @@ Inference:
 ## Installation
 
 CycleVLA supports two VLA backbones, OpenVLA-OFT and pi0.5. See [SETUP.md](SETUP.md) for instructions on setting up the environments. See [LIBERO.md](LIBERO.md) for setting up the LIBERO and LIBERO-Plus simulation benchmark and generating our subtask-decomposed dataset.
+
+## Dataset
+
+Our subtask-decomposed LIBERO dataset (RLDS format) is available on Hugging Face: [dannymcy/libero_subtask_decomposed](https://huggingface.co/datasets/dannymcy/libero_subtask_decomposed)
+
+The dataset contains 6,501 subtask sub-episodes (266,207 transitions) across all four LIBERO suites with 9-dim action supervision including stop signals and subtask progress labels. See [LIBERO.md](LIBERO.md) for details on dataset generation.
 
 ## Training and Evaluation
 
